@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "cortec-framework: reference implementations of CoRTeC"
+message: "Cite the paper (Calyie/cortec) for the method; cite this repository for the software."
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/Calyie/cortec-framework"
+abstract: >-
+  Two Apache-2.0 packages implementing CoRTeC, cohort-conditioned differentially private synthetic
+  tabular data from a frozen language model, with every guarantee the paper establishes enforced in
+  code: capability gating, hash-locked prompts, an auditable privacy ledger, a per-column coverage
+  guard, and a model-free hybrid that relabels an existing DP synthesiser's output.
+authors:
+  - family-names: "Nnona"
+    given-names: "Calister"
+    email: "calisternnona@gmail.com"
+references:
+  - type: article
+    title: "CoRTeC: Cohort-Conditioned Differentially Private Synthetic Tabular Data from a Frozen Language Model"
+    repository-code: "https://github.com/Calyie/cortec"
+    authors:
+      - family-names: "Nnona"
+        given-names: "Calister"

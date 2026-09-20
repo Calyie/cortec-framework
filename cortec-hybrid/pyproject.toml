@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+authors = [{name = "Calister Nnona", email = "calisternnona@gmail.com"}]
+name = "cortec-hybrid"
+version = "0.1.0"
+description = "Conditional-signal correction for marginal DP synthesisers (AIM/MST/PrivBayes), with no LLM dependency"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["numpy>=1.24", "pandas>=2.0", "scikit-learn>=1.3", "cortec>=0.1.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cortec_hybrid*"]
