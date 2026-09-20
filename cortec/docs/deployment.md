@@ -5,7 +5,8 @@ Appendix H.8 of the CoRTeC technical report (`paper/CoRTeC.md` in the research r
 is the authoritative source; section references of the form §x.y and bracketed citations [n] refer
 to that report. The arXiv paper (`paper/CoRTeC_arxiv.pdf`) carries the condensed version of this
 material in its Appendix C. The utility transmission bound is Stage C of the pipeline (Stage A is
-the release, Stage B the generation).
+the release, Stage B the generation); the package ships it as `cortec.bound`
+(`bound_with_controls`), and the checklist's step 9 below is run with it.
 
 Every control below is enforced in the `cortec` package rather than documented as advice, and each
 failure mode corresponds to a regression test in `tests/` named after the defect it prevents.

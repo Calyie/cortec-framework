@@ -7,7 +7,7 @@ companion repository **[cortec](https://github.com/Calyie/cortec)**.
 
 | package | what it is | tests |
 |---|---|---|
-| [`cortec/`](cortec/) | The mechanism end to end: a public stratification rule, DP histograms, a DP conditional target table, and generation from those statistics alone by a frozen model. Capability gating, SHA-256 hash-locked prompts, an auditable privacy ledger whose `spend()` is the only source of a noise scale, a per-column coverage guard, class-conditional histogram blocks, exact-count batches, rake-and-refine selection from a generated pool, and an output property test | 127 |
+| [`cortec/`](cortec/) | The mechanism end to end: a public stratification rule, DP histograms, a DP conditional target table, and generation from those statistics alone by a frozen model. Capability gating, SHA-256 hash-locked prompts, an auditable privacy ledger whose `spend()` is the only source of a noise scale, a per-column coverage guard, class-conditional histogram blocks, exact-count batches, rake-and-refine selection from a generated pool, an output property test, and Stage C, the utility transmission bound (`cortec.bound`) | 136 |
 | [`cortec-hybrid/`](cortec-hybrid/) | For institutions that will not put a language model in the data path: release a DP conditional table and relabel an existing marginal synthesiser's output to match it. No model server in the dependency tree | 26 |
 
 Every guarantee the paper establishes is enforced in this code rather than documented, and every
@@ -54,6 +54,13 @@ Where the guarantee does not hold (carried in every release audit, per NIST SP 8
 - **Floating-point Laplace.** The library mechanism is vulnerable to the Mironov (2012) attack.
 - **Pretraining provenance.** The guarantee says nothing about the model's training corpus.
 
+Stage C (`cortec.bound`) adds a **utility** transmission bound to a release package: a
+simultaneous, budgeted bound on how far the synthetic conditional rates can sit from the private
+ones, with a real-sample ceiling and a permuted floor that must disagree before a verdict is
+issued. It spends `epsilon_cert` once through the ledger and reports the total per row and per
+person. It bounds utility only; it is not a privacy audit and nothing in its report is presented
+as a privacy guarantee. See `cortec/README.md` for usage.
+
 ## How this code is held to the paper
 
 `cortec/paper/audit/verify_paper_tool_parity.py` reads this tree and the paper together, 173 assertions that the shipped code does what the paper says, packaging included. It locates this
@@ -68,7 +75,7 @@ cd cortec && python3 paper/audit/verify_paper_tool_parity.py
 ## Tests
 
 ```bash
-python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 127 + 26
+python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 136 + 26
 ```
 
 ## Citation and license

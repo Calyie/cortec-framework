@@ -370,6 +370,40 @@ failure mode is not a guarantee about the mapping in general: **establishing whe
 table can be conveyed to a language model without silent loss is an open problem.** A passing guard
 is evidence that one failure mode is absent. Compare per-column output against the release anyway.
 
+## Stage C: the utility transmission bound
+
+Stage A spends the budget, Stage B decodes the release, and Stage C answers the question a release
+package has to answer without the private data: how far can the synthetic conditional structure be
+from the private one? For each released cell it releases a Laplace estimate of the private target
+rate at a declared budget `epsilon_cert` and turns the noise into a one-sided bound that holds
+simultaneously over every cell with probability at least `1 - alpha`. The Laplace scale uses the
+public suppression floor `n_min`, never the private cell size, so it is pure epsilon-DP and the
+spend appears in a ledger like every other query.
+
+```python
+from cortec import bound_with_controls
+
+report = bound_with_controls(schema, release, private_df, synthetic, holdout_df,
+                             epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
+print(report.summary())            # headed UTILITY TRANSMISSION BOUND; a utility claim
+report.to_json("bound.json")       # the report a third party can read without the private data
+```
+
+`holdout_df` must be real data that was not used to build the release: it supplies the ceiling (a
+real sample, which should clear the tolerance) and the floor (the same sample with its target
+permuted, which must not). All three conditions are scored against one noisy release of the
+private rates, so `epsilon_cert` is spent once; the deployment total is `epsilon_release +
+epsilon_cert` and the report states it per row and per person. If the ceiling fails or the floor
+clears, the test did not discriminate and `report.verdict` is `None`: do not report that run.
+
+Three things the bound will not do, by construction. It scores a released cell the synthetic data
+never covers at the trivial bound of 1.0, so a bound cannot be obtained by covering a convenient
+subset of the cells; it reports cells with fewer than 20 synthetic rows as thin rather than trusting
+them; and it draws its noise from an unseedable source, because a seeded draw would let anyone
+holding the seed subtract the noise and recover the private rate. It is a **utility** bound. The
+report's `_what_this_is` block says so, its `_standards_not_claimed` block names the privacy
+frameworks it must not be mapped to, and nothing in it is presented as a privacy guarantee.
+
 ## Model support
 
 Two things decide output quality here, and only one of them is the model.

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 authors = [{name = "Calister Nnona", email = "calisternnona@gmail.com"}]
 name = "cortec"
-version = "0.2.0"
+version = "0.3.0"
 description = "Differentially private synthetic tabular data from a frozen LLM conditioned only on DP statistics"
 readme = "README.md"
 requires-python = ">=3.10"

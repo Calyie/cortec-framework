@@ -12,9 +12,11 @@ from .generate import (Generator, GenerationError, ContextTruncationError,
 from .models import check_model, ModelCapabilityError, validated_models
 from .autoconfig import derive, DerivedConfig
 from .select import select_to_release, inclusion_weights, pool_coverage, release_subbin_values
+from .bound import transmission_bound, bound_with_controls, BoundReport, BoundResult, BoundError
 
-__version__ = "0.2.0"
-__all__ = ["PrivacyLedger", "PrivacyAccountingError", "Schema", "Band", "SchemaError",
+__version__ = "0.3.0"
+__all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundResult", "BoundError",
+           "PrivacyLedger", "PrivacyAccountingError", "Schema", "Band", "SchemaError",
            "DataValidationError", "Release", "release_statistics", "ReleaseError",
            "Generator", "GenerationError", "ContextTruncationError", "EmptyContentError",
            "FatalAPIError", "ModelRefusalError", "RateLimitedError",
