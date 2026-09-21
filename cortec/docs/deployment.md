@@ -159,7 +159,7 @@ downstream AUC.
 
 Generation costs are measured from the token counts each vendor reported over our own runs, priced at
 list rates; they are indicative rather than a benchmark. The shipped configuration's row is the
-NHANES, Adult and finance runs of §7.12 through Vertex AI (nine draws, $8.2 in all): the
+NHANES, Adult and finance runs of §7.12 (nine draws, eight through Vertex AI and one through the public API, $16.6 in all): the
 exact-count prompt roughly doubles the reasoning tokens a call spends, and the pool multiplies the
 rows generated per row kept. They **exclude** the reasoning-suppressed
 configurations of §7.5, because those produce output at or below the no-information floor and their
