@@ -1,11 +1,12 @@
 # cortec
 
-Differentially private synthetic tabular data from a frozen language model conditioned only on DP
-statistics.
+Differentially private synthetic tabular data from a frozen language model that is conditioned only
+on DP statistics.
 
-The privacy budget is spent once, on a statistics release. The generator reads only that release and
-never a private record, so generation is post-processing: it adds no privacy cost, and unlimited
-datasets can be drawn from a single release.
+The privacy budget is spent once, on a statistics release (Stage A). A frozen model then generates
+records from that release and never sees a private record (Stage B), so generation is
+post-processing: it adds no privacy cost, and unlimited datasets can be drawn from one release. An
+optional Stage C attaches a budgeted utility bound to the output.
 
 ```
 private data ──► DP release (Stage A) ──►│──► frozen LLM (Stage B) ──► synthetic records
@@ -15,25 +16,114 @@ private data ──► DP release (Stage A) ──►│──► frozen LLM (St
                                     ever sees a private record
 ```
 
-[`docs/deployment.md`](docs/deployment.md) is the operational manual: the controls mapped to
-standards, every operational failure mode with the guardrail that enforces it, the deployment
-checklist, the two deployment patterns, and the cost model.
+This README is the setup guide. Read it in order the first time. Each step names the call it uses,
+the settings that matter, and what to check before moving on.
 
-## Install
+| Step | What you do |
+|---|---|
+| 1. Install | Install the package with the extra for your model vendor |
+| 2. Choose where the model runs | Pick the surface and set its credentials |
+| 3. Prepare the data | One table, one row per person, string categoricals |
+| 4. Declare the schema | Public facts only: columns, bounds, bins, target |
+| 5. Stage A | Spend the budget once, check the audit, store the release |
+| 6. Stage B | Generate from the release and check the run |
+| 7. Stage C | Bound how far the output is from the private data |
+| 8. Evaluate | Compare against a real sample and a permuted floor |
+| 9. Trust boundary | What the model sees, and what the guarantee does not cover |
+| 10. Troubleshooting | What each refusal means and what to change |
 
-The package is not on PyPI. From a clone of this repository:
+Two further documents: [`docs/deployment.md`](docs/deployment.md) is the operational manual for a
+regulated deployment (the architecture, the checklist, the controls mapped to standards, the
+failure modes, the two patterns and the cost model), and
+[`docs/design-notes.md`](docs/design-notes.md) records the measurements behind the defaults.
+
+## 1. Install
+
+Python 3.10 or later. The package depends on numpy and pandas; each vendor SDK is an optional
+extra. The package is not on PyPI, so install from a clone of this repository:
 
 ```bash
-pip install './cortec[anthropic]'     # Claude, recommended on AWS Bedrock
-pip install './cortec[openai]'        # GPT, recommended on Azure OpenAI
-pip install './cortec[gemini]'        # Gemini, recommended on Google Vertex AI
-pip install './cortec[ollama]'        # scientific controls only; NOT a deployment path (see Backends)
+git clone https://github.com/Calyie/cortec-framework
+cd cortec-framework
+pip install './cortec[anthropic]'     # Claude
+pip install './cortec[openai]'        # GPT
+pip install './cortec[gemini]'        # Gemini
+pip install './cortec[ollama]'        # local models: scientific controls only; NOT a deployment path (step 2)
 ```
 
-## Use
+The enterprise surfaces have their own extras: `bedrock` (adds request signing for AWS), `azure`
+and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
+
+```bash
+python3 -m pytest cortec/tests -q     # 136 tests, offline, each named after the defect it prevents
+```
+
+## 2. Choose where the model runs, and set the credentials
+
+The generator is called through one of four backends, and three of them can reach either the
+vendor's public API or an enterprise surface inside your own cloud account. The `model` name is the
+same on both; the surface changes only the client and the credentials.
+
+| Backend | Surface | Set before running | `Generator(...)` arguments |
+|---|---|---|---|
+| `anthropic` | public API | `ANTHROPIC_API_KEY` | `backend="anthropic", model="claude-fable-5"` |
+| `anthropic` | Claude on AWS Bedrock (recommended) | AWS credentials from the standard chain (environment, profile or instance role) and `AWS_REGION`; the `bedrock` extra | `surface="bedrock", surface_model="<Bedrock model id or inference-profile ARN>"` |
+| `openai` | public API | `OPENAI_API_KEY` | `backend="openai", model="gpt-5"` |
+| `openai` | GPT on Azure OpenAI (recommended) | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, optionally `AZURE_OPENAI_API_VERSION` | `surface="azure", surface_model="<your deployment name>"` |
+| `gemini` | public API | `GEMINI_API_KEY` | `backend="gemini", model="gemini-3.5-flash"` |
+| `gemini` | Gemini on Google Vertex AI (recommended) | Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, optionally `GOOGLE_CLOUD_LOCATION` (default `global`) | `surface="vertex"` |
+| `ollama` | a local Ollama server | `ollama_url` (default `http://localhost:11434`) | **not an enterprise surface — out of deployment scope**; the capability gate refuses these models by default |
+| `mock` | none | nothing | offline dry runs of the whole pipeline |
+
+**Which endpoint to point this at.** For regulated data, use the enterprise-hosted, tenant-isolated
+surface in your own cloud account (Bedrock, Azure OpenAI or Vertex AI), with private networking,
+data residency, contractual exclusion of training on inputs, and a BAA where HIPAA applies. The
+vendors' public developer APIs are supported but are not recommended for regulated deployment: the
+weights are the same, the contract and the network path are not, and those are what a compliance
+review assesses. The privacy argument does not depend on the endpoint, because the request carries
+only the DP release (step 9); the compliance argument does. The paper's own measurements were
+made on the public APIs; §6.2 of the technical report says which results that affects.
+
+**What is verified.** The tests construct each SDK's real client class offline and replace only the
+transport, so an SDK change fails in CI rather than at your first call.
+**Vertex AI is verified live**: Gemini 3.5 Flash through a service account holding only
+`roles/aiplatform.user`, both generation paths, reasoning reported on every call. The newest Gemini models are served from the
+`global` location and return 404 in every regional one, and a model 404 is a fatal, non-retried
+error. **What is not verified:** a live round trip on Bedrock or Azure OpenAI, because no account
+was available to us. Treat your first run there as that test: generate a small batch, check
+`gen.stats.calls_with_reasoning_block` and `gen.stats.thinking_tokens`, and compare the output with
+the release before generating at scale.
+
+A missing setting, or a surface that does not serve the chosen backend, fails when the `Generator`
+is constructed, before any client exists. `gen.describe_surface()` returns one line for your audit
+trail, and a run on a public surface says so in `gen.stats.warnings`.
+
+## 3. Prepare the data
+
+Stage A reads one pandas DataFrame with exactly the columns the schema declares.
+
+- Categorical columns hold strings. Integer codes are fine as strings (`"1"`, `"2"`). Read the file
+  with `keep_default_na=False` if a real category is spelled `None`, `NA` or `nan`, because pandas
+  otherwise turns it into a missing value.
+- Numeric columns hold numbers inside the declared bounds. Values outside are clipped, and the
+  validation report says how many; a surprise there means the declared bounds are wrong.
+- The target column holds exactly two labels, the ones declared as `positive` and `negative`.
+- **One row per person.** ε protects one row. If a person contributes `k` rows, that person's
+  guarantee is `k · ε`. Count rows per individual before Stage A; if the maximum is above 1, cap
+  each person's rows or aggregate to one row per person. Step 5 explains the declaration.
+
+Validation runs before any budget is spent and reports every problem at once.
+
+## 4. Declare the schema
+
+A `Schema` is a public description of the table. Everything in it must be knowledge you have
+without looking at the private file: the column list, domain bounds from documentation or
+convention, bin edges from clinical or regulatory practice, the target. Never derive a bound or an
+edge from the data's own quantiles. A schema inferred from private values leaks through its bounds,
+which is why `Schema.from_dataframe()` does not exist.
 
 ```python
-from cortec import Schema, Band, release_statistics, Generator
+from cortec import Schema, Band
 
 schema = Schema(
     name="encounters",
@@ -46,454 +136,147 @@ schema = Schema(
                                   Band("los6+", 6, 31)])],
     conditional=[("admission_type",), ("admission_type", "a1c_result")],
 )
-
-# Stage A: the only code that touches your private data.
-release = release_statistics(schema, private_df, epsilon_total=2.0, n_min=150)
-print(release.audit["epsilon_accounted"])      # 2.0
-release.to_json("release.json")                # contains no private data
-
-# Stage B: post-processing. Run it as often as you like, at no further privacy cost.
-# Every batch is given the exact per-column counts it owes (on by default), and generate_selected
-# draws a 3x pool and keeps the rows whose marginals match the release.
-gen = Generator(schema, backend="anthropic", model="claude-fable-5", reasoning="on")
-synthetic = gen.generate_selected(release, n_rows=5000, pool_factor=3)
-
-# Verify reasoning actually fired. A reported count of ZERO and NO count at all are different
-# states, and some transports return neither. Reading thinking_tokens alone once produced a
-# published claim that a model's reasoning was off when it had in fact run on every call.
-print(gen.stats.calls_with_reasoning_block, "of", gen.stats.calls, "calls reasoned")
-print(gen.stats.calls_reasoning_unmeasured, "calls could not be verified either way")
-for w in gen.stats.warnings:
-    print("WARN:", w)
 ```
 
-`generate()` is the same without the pool: one call's worth of rows per batch, still with exact
-counts. `generate_by_cell()` generates per released conditional cell instead of per cohort. It
-refuses a release whose conditioning columns are not substantially covered by the released cells,
-because that path emits rows only for released cells and would silently drop the rest of the
-population.
+| Field | What it declares | Notes |
+|---|---|---|
+| `name` | an identifier used in file names and the audit trail | |
+| `numerical` | `{column: (lo, hi)}`, the public domain of each numeric column | values outside are clipped |
+| `categorical` | `{column: [allowed values]}` | every declared value stays in the release, even when rare |
+| `target`, `positive`, `negative` | the binary target and its two labels | the target is not listed as a feature |
+| `bins` | `{column: [edges]}`, public histogram edges | default: 10 equal-width bins over the bounds |
+| `stratify` | `[(column, [Band(name, lo, hi), ...])]`, the public rule that forms cohorts | the bands must tile the declared domain with no gap; the top band is closed at its upper edge |
+| `conditional` | the levels of the conditional target table, coarse to fine, as column tuples | leave it out to have it derived (below) |
+| `coarsen` | `{column: {declared value: group}}`, grouping a wide categorical for conditioning | derived by auto-configuration; may also be supplied |
 
-## When to use it, and when not
+**Leave `conditional` empty and the hierarchy is derived.** Auto-configuration ranks the columns by
+mutual information with the target, from one DP-noised contingency table per column. It chooses how
+many columns to condition on from the public cardinalities and the number of records you will
+request, coarsens wide categoricals, and derives a cohort stratification on the highest-ranked
+numeric column when the data can support it. The selection spends a declared share of
+`epsilon_total`, between 5% and 30% depending on the schema size and the row count, and is charged
+to the same ledger. Declare `conditional` yourself and it is used untouched. Auto-configuration has
+no concept of a person, so on multi-row data it can select a column that is a proxy for how many
+rows someone contributes; declare the columns yourself if that matters.
 
-**Use it** when your private data plausibly departs from what a general-purpose model would assume,
-such as institution-specific coding, local case mix or proprietary product structure, and when a
-downstream model or a calibrated rate is the deliverable.
+## 5. Stage A: release the statistics
 
-**Do not use it** for a published marginal table when a marginal synthesiser will do. With exact
-counts and selection (below) the output reaches MST's 1-way error and records lower 2-way and
-conditional error than MST and AIM, but the marginal synthesisers pay once and sample freely, and AIM
-recorded the lowest error on its own 3-way workloads in our measurements of the earlier
-configuration.
+```python
+from cortec import release_statistics
 
-**Do not use an unconditioned LLM** for any regulated quantity. Asked for synthetic hospital records
-with no conditioning, a frontier model reported a 30-day readmission rate of 98.5% for a group whose
-true rate was 21.4%, and it reported that same 98.5% whatever the private data said. No rank-based
-utility metric reveals that, because the ordering is right and only the magnitude is wrong.
+release = release_statistics(schema, private_df, epsilon_total=2.0, n_min=150,
+                             max_rows_per_person=1)
+print(release.audit["epsilon_accounted"])      # 2.0
+release.to_json("release.json")                # contains no private record
+```
 
-**How close to real data does it get?** Here is the boundary rather than the best case. On UCI
-Adult at n = 300, models trained on CoRTeC's output are statistically indistinguishable from models
-trained on a real sample of the same size: differences of +0.007, −0.003 and +0.012 AUC across three
-students, every p > 0.18. That result was measured on one dataset first, and we measured where it
-stopped. On a finance dataset the same comparison was a significant shortfall under the pooled
-release: TSTR-LR 0.652 against a real sample's 0.695, about 94% of real-sample utility (Welch
-p = 0.0034). The class-conditional release takes the two tree students to the real-sample floor on
-that dataset. The configuration this package ships by default (a class-conditional release,
-exact-count batches and selection from a threefold pool; see below) brings all three students within
-0.015 AUC of the floor on both datasets, with 1-way marginal error at the level of MST and below a
-real sample of the same size (paper §7.12). That is a result at n = 300 under one generator family.
-On Adult at n = 1,000 the point estimates favour the real sample (0.827 against 0.855), underpowered
-at two draws but in the direction the mechanism predicts: a fixed release does not get richer as you
-ask for more records. **Do not assume parity. Measure it on your own data against a real sample of
-matched size, and read the conditional measures beside the aggregate ones.**
+This is the only call that reads the private data. It forms the cohorts from the public rule;
+releases one Laplace-noised histogram per column per cohort (one per outcome class where both
+classes clear `n_min`), the class balance, noised cohort and cell sizes, and the conditional target
+table; and records every query in a ledger.
 
-## Where the trust boundary sits
+| Parameter | Default | What it does |
+|---|---|---|
+| `epsilon_total` | `2.0` | the whole row-level budget; every query is charged to it |
+| `n_min` | `150` | cohorts and cells with fewer records are suppressed; the floor is 50, below which a rate is dominated by its own noise |
+| `conditional_fraction` | `0.2` | the share of the budget for the conditional table; the histograms take the rest |
+| `max_rows_per_person` | `None` | the privacy unit: the most rows one person contributes; left out, the audit records `UNDECLARED` |
+| `acknowledge_vacuous_privacy_unit` | `False` | required to proceed when `max_rows_per_person × epsilon_total` exceeds 10 |
+| `class_conditional` | `True` | one histogram block per (cohort, outcome) where both outcomes clear `n_min`; `False` restores a pooled block |
+| `autoconfig` | `True` | derive the hierarchy when `schema.conditional` is empty |
+| `n_records` | `1000` | how many records you intend to generate; auto-configuration sizes the table against it |
+| `charge_suppression` | `True` | charge the decision of which cohorts and cells appear; `False` is the literature-standard treatment, and the choice is recorded |
+| `seed` | `None` | tests only: a seeded release is reproducible, so its noise can be subtracted and it carries no guarantee; the audit says so |
 
-**No private record is ever sent to the model.** The prompt carries only released statistics:
-noised histograms, class balances and a conditional table. Generation is post-processing of a DP
-release, so by post-processing immunity whoever runs the model learns nothing beyond what the release
-already discloses, and the ε guarantee does not depend on where that computation happens.
-
-The usual objection to an LLM-based method, that data is being sent to a third party, therefore does
-not apply. That is not because the endpoint is trustworthy but because there is no private data in
-the request. The decoder may be a tenant-isolated enterprise endpoint (Bedrock in your own VPC,
-Azure OpenAI, Vertex AI) under a BAA, or an air-gapped model on your own hardware with no network
-egress; the argument is the same. What differs between those is capability, not trust, which is why
-the deployment recommendation names enterprise platforms even though the privacy argument permits
-local weights (see the sweep-only tier under Capability gating).
-
-**What the guarantee does not cover.** It says nothing about the model's pretraining corpus. If a
-private record was in it, that happened before this tool ran. The sharper version of the concern is
-that conditioning on true marginals for a narrow stratum resembles a prompt-based extraction attack:
-it tells the model which region to sample from, and a memorised record there becomes more reachable.
-DP does not exclude this, because such a record is not a function of your release. In the research
-behind this tool, four membership-inference attacks (nearest-neighbour, exact-match, shadow-model,
-and a per-record likelihood-ratio test, each validated on a positive control) found no advantage
-above chance and zero exact matches on any dataset. That is evidence about the published output, not
-a proof about the corpus, and it is the strongest statement available.
-
-## The guarantee, and how to audit it
-
-Record-level ε-differential privacy under add/remove-one adjacency, in the central model.
-
-**ε protects one ROW, and on some data that is not one person.** Under group privacy a person
-contributing `k` rows receives `k · ε`. On encounter-level hospital data, one admission per row and
-several per patient, this is not a technicality. In a real dataset of 101,766 encounters from 71,518
-patients the heaviest patient contributes 40 encounters, so a declared ε of 2.0 is an ε of 80 for
-that patient, which is outside any range normally considered meaningful.
-
-**So this package is for one-row-per-person data.** On unaggregated longitudinal records the
-guarantee degrades to a number that carries no meaning, and that is a limit on what the mechanism is
-for rather than a box to tick. The magnitude is a property of row-level DP rather than of CoRTeC,
-since any row-level synthesiser on the same data inherits the same factor, but that is a reason not
-to prefer a competitor, not a reason to ship the claim.
-
-`k` cannot be computed for you without spending budget on it, so you declare it. Where you declare
-one whose ε per person is vacuous, **the release is refused rather than annotated**:
+**The privacy unit.** ε protects one ROW, and on some data that is not one person. Under group
+privacy a person contributing `k` rows receives `k · ε`. On encounter-level hospital data, one
+admission per row and several per patient, this is not a technicality: in a real dataset of 101,766
+encounters from 71,518 patients the heaviest patient contributes 40 encounters, so a declared ε of
+2.0 is an ε of 80 for that patient, which is outside any range normally considered meaningful. So
+this package is for one-row-per-person data. `k` cannot be computed for you without spending
+budget, so you declare it, and a declaration whose ε per person is vacuous is refused rather than
+annotated:
 
 ```python
 # refused: eps_person = 80
-cortec.release_statistics(schema, df, epsilon_total=2.0, max_rows_per_person=40)
+release_statistics(schema, df, epsilon_total=2.0, max_rows_per_person=40)
 # ReleaseError: REFUSED: max_rows_per_person=40 at epsilon_total=2.0 gives
 #   epsilon_per_person=80.0, past the 10 beyond which a per-person guarantee carries no
 #   meaning ... Either aggregate to one row per person before Stage A ...
 
-# proceed anyway, with the acknowledgement recorded in the audit trail that ships with the release
-release = cortec.release_statistics(schema, df, epsilon_total=2.0, max_rows_per_person=40,
-                                    acknowledge_vacuous_privacy_unit=True)
+# proceed anyway, with the acknowledgement recorded in the audit trail
+release = release_statistics(schema, df, epsilon_total=2.0, max_rows_per_person=40,
+                             acknowledge_vacuous_privacy_unit=True)
 release.audit["epsilon_per_person"]           # -> 80.0
 release.audit["epsilon_per_person_vacuous"]   # -> True
-release.audit["warnings"]                     # -> ["VACUOUS PER-PERSON GUARANTEE ACKNOWLEDGED: ..."]
-
-# the ordinary case
-release = cortec.release_statistics(schema, df, epsilon_total=2.0, max_rows_per_person=1)
-release.audit["epsilon_per_person"]           # -> 2.0
 ```
 
-Leave it out and the audit records `"UNDECLARED"` with `privacy_unit_declared: false` and a vacuity
-verdict of `"UNKNOWN"`: never `false`, and never a quiet assumption of 1, which is how an
-encounter-level release comes to carry a per-person claim it has not earned. **If your data has more
-than one row per person, either aggregate to one row per person before Stage A, or report
-`ε_person` rather than the per-row number.**
+If your data has more than one row per person, aggregate to one row per person before Stage A, cap
+each person's rows, or report `ε_person` rather than the per-row number.
 
-One thing the tool cannot do for you. Auto-configuration ranks conditioning columns by mutual
-information and has no concept of a person, so it can select a column that is itself a proxy for how
-many rows someone contributes. On the hospital dataset above it chose `number_inpatient`,
-correlation 0.733 with encounter count. That does not change ε, but it means the release is
-stratified by contribution count. Declare your conditioning columns yourself if that matters to you.
+**Check the release before generating.**
 
-**The ledger.** Every privatised query is recorded, and `PrivacyLedger.spend()` is the only function
-in the package that returns a noise scale, so nothing can be released without appearing in the audit
-trail. `release.audit` is a complete, machine-readable record from which a privacy engineer can
-recompute the total by hand:
+- `release.audit["epsilon_accounted"]` equals what you declared and `within_budget` is true. The
+  audit lists every query with its epsilon, sensitivity, composition rule and partition key, so a
+  privacy engineer can recompute the total by hand. `PrivacyLedger.spend()` is the only function
+  in the package that returns a noise scale, so nothing is released without appearing there.
+- `release.audit.get("warnings", [])` is empty, or you have read each entry. A seeded release and
+  an undeclared or vacuous privacy unit are recorded there. Two further conditions are printed at
+  release time rather than recorded: an under-spent conditional budget (some declared levels
+  released no cell) and a noise-dominated conditional table (the noise on a level's rates is at or
+  above their spread). Read the console.
+- `release.conditional_levels` is non-empty and its finest level has cells. An empty table is
+  refused, because the output would be unconditioned.
+- Store `release.json` and hash it. Generation reads only this file, so every later draw and every
+  comparison must reuse it. A release cannot be regenerated identically, because its noise is
+  unseeded, and re-running Stage A spends the budget again.
+
+## 6. Stage B: generate
 
 ```python
-import json; print(json.dumps(release.audit, indent=2))
+from cortec import Generator
+
+gen = Generator(schema, backend="anthropic", model="claude-fable-5", reasoning="on",
+                budget_usd=25.0)
+synthetic = gen.generate_selected(release, n_rows=5000, pool_factor=3)
 ```
 
-It records every query with its epsilon, sensitivity, composition rule and partition key, the
-per-group totals, and the composition rules applied. `cortec/accounting.py` is written to be read
-end to end by someone auditing it, independently of the rest of the package.
-
-One deliberate conservatism: suppressing cohorts below `n_min` is a decision made by looking at
-private counts, so by default we charge for it rather than treating cohort sizes as public. Pass
-`charge_suppression=False` for the literature-standard treatment; the choice is recorded.
-
-## What the release carries: class-conditional histograms
-
-The release used to carry one pooled feature histogram per cohort plus the target rate inside the
-conditional hierarchy's cells, and nothing about how any other feature relates to the target. The
-generator filled that in from its prior, and on the finance benchmark the filled-in columns
-measurably degraded the downstream model (paper §F.3.1). The release now carries one histogram block
-per (cohort, outcome) wherever both outcomes clear `n_min`.
-
-- **Same ε.** The two outcome blocks of a cohort are disjoint, so they compose in parallel at the
-  same ε per query the pooled block spent. The pooled histogram is their mixture under the released
-  class balance, which is post-processing and no query. The ledger charges each record the class
-  balance plus one block, through nested partition keys (`cohort/outcome`), and `epsilon_accounted`
-  is unchanged. Where either outcome falls short of `n_min` the cohort keeps a pooled block.
-- **What the model sees.** "Rows with `readmitted_30d = YES` look like this; rows with `NO` look
-  like that" for every column, with the instruction to decide each row's outcome first and draw its
-  other columns from that outcome's distributions. Cell-wise prompts show the same per-outcome
-  blocks for the k positives and n − k negatives they ask for.
-- **Measured.** Decoded by a naive independent sampler with no model at all, the class-conditional
-  release reaches the real-sample floor on two of three downstream students on both finance and
-  Adult, where the pooled release trails it by 0.03–0.06 AUC, and held-out conditional error
-  improves by 31–39% (technical report §7.11). Through the generator on the finance benchmark, three
-  draws per release, TSTR is 0.680 / 0.712 / 0.704 (LR / RF / GBM) from the class-conditional
-  release against 0.651 / 0.662 / 0.662 from the pooled one with Gemini 3.5 Flash (Welch p = 0.007 /
-  0.017 / 0.029), and 0.670 / 0.723 / 0.716 against 0.652 / 0.673 / 0.664 with Claude Fable 5, where
-  the tree students reach the real-sample floor of 0.695 / 0.727 / 0.717 and held-out conditional
-  error rises 0.008. On Adult two Fable 5 draws score 0.846 / 0.885 / 0.873 against a real sample's
-  0.830 / 0.870 / 0.840 (paper §7.11).
-- `release_statistics(..., class_conditional=False)` restores the pooled release.
-
-## Exact counts and selection: how the output reaches the release's own fidelity
-
-Two steps, both post-processing of the release, both on by default.
-
-- **Exact-count batches.** Every batch is told the number of rows it owes per bin of each numeric
-  column, per category of each categorical column, and per outcome. The counts are apportioned from
-  the released histograms for the cohort as a whole and updated after each accepted batch, so a
-  batch returning more or fewer valid rows than asked cannot leave the cohort short. A frontier model
-  given these counts reproduces them exactly; given shares, it matches about two thirds of them.
-  `Generator(quota=False)` turns this off.
-- **Selection from a pool.** `generate_selected(release, n_rows, pool_factor=3)` asks for three
-  times the rows and keeps the `n_rows` whose cell counts match the release: inclusion weights by
-  iterative proportional fitting over every released cell, systematic sampling, then a greedy
-  exchange of rows that lowers the weighted distance to the released counts, with the pooled
-  marginals weighted above the per-cell counts and any suppressed category given zero mass. A cohort
-  whose release carries only a pooled block is constrained at cohort level, not per class, because
-  imposing a pooled histogram on each class erases the feature-to-target structure; that is a
-  regression test. The release carries the cohort rule it was built under, so selection works on
-  auto-configured releases whose cohorts the caller's schema does not name.
-- **A pool that stopped early is refused.** Selection can only choose among rows that exist. A
-  generation run that hit its spend cap or lost its connection leaves its later cohorts unfilled, and
-  no reweighting can repair a cohort share from rows that are not there. `select_to_release` checks
-  every released cohort's rows against the rows it owes (`pool_coverage` reports them) and raises,
-  naming the short cohorts, unless `allow_short_pool=True`. Generate the full pool.
-- **Categorical cells are checked against the declared set.** A model that writes an integer-coded
-  category with a decimal point (`2.0` for a column declared as `1`/`2`) would otherwise re-type the
-  whole pool as floats on concatenation, and the selection step and every consumer would then see a
-  category the data does not have. The parser normalises integer-valued floats to the declared
-  string and drops rows whose value is not declared, counted in `stats.rows_undeclared_category`,
-  exactly as an out-of-domain number is dropped.
-- **Values inside a bin are redrawn from the release.** A released histogram fixes bin counts and
-  nothing finer, so where a value sits inside its bin is never released information. In cohorts
-  whose release carries class-conditional blocks, `generate_selected` redraws every numeric value
-  uniformly inside its released bin, never crossing the row's stratification band, so the output's
-  structure below bin resolution is the release's rather than the generator's. In cohorts with only
-  a pooled block the generator's values are kept, because there they are the only carrier of the
-  class signal. Measured on every stored arm (paper, Appendix H.17), this lifted NHANES's
-  logistic-regression student from 0.729 to 0.752 against a real sample's 0.773 and changed no
-  binned measure anywhere. `sub_bin="generator"` disables it.
-
-The `mock` backend honours the exact-count block, so the whole generate-and-select loop runs end to
-end with no API and no cost; the offline test in `tests/test_selection.py` does exactly that.
-
-Measured in the paper (§7.12) on Adult and finance with Gemini 3.5 Flash: 1-way marginal error
-within 0.005 of MST's and below a real sample of the same size, 2-way error below AIM and MST,
-conditional error about a quarter of a real sample's, and downstream utility at the real-sample
-level. The ceiling is the release's own distance from the truth, which is why the conditional table's
-share of the budget defaults to a fifth (`conditional_fraction=0.2`): the histograms take the rest,
-and the release's marginal error halves for no measurable loss elsewhere. The cost is `pool_factor`
-times the generation spend, and roughly twice the thinking per call on models that reason over the
-counts.
-
-## Guardrails you cannot turn off by accident
-
-Each guardrail corresponds to a defect that produced a plausible but wrong conclusion during the
-research behind this tool.
-
-| Guardrail | The wrong conclusion it prevents |
-|---|---|
-| Model capability gating | A 7B model scored a transmission slope of 0.21 while emitting perfectly valid CSV. It fails silently, so it is refused rather than warned about. |
-| Hash-locked prompts | Removing the conditional table or the "even if counterintuitive" instruction collapses the mechanism to an unconditioned model, while the pipeline keeps producing plausible rows. |
-| Context-fit check | Ollama's 4096-token default silently truncated the prompt, cutting off the conditional table, which looked like "this model family ignores the statistics". |
-| Empty-content detection | A reasoning model spent its whole output budget on hidden chain-of-thought and returned `content=""`, which looked like "this model cannot follow the schema". |
-| `keep_default_na=False` | pandas reads the string `'None'` as missing. `A1Cresult='None'` means the test was not ordered; the default deleted 83% of rows at a 100% call-success rate. |
-| Domain-bounds rejection | A degenerate response produced a credit limit of 34 against a declared floor of 10,000; without the check it entered the dataset silently. |
-| Declared-category check | One batch wrote an integer-coded category as `2.0`; concatenation re-typed the whole pool, and the selection step and the evaluator then saw a category the data does not have (conditional error 0.22 against 0.01 from a pool whose generation was fine). |
-| Pool-coverage guard | A run that stopped at its spend cap left two cohorts with 7 rows each; selection cannot fill a cohort from rows that do not exist, and the output's cohort shares were wrong while every per-row check passed. |
-| Bands tile the domain | Half-open autoconfig bands left the records at the domain maximum in an `oob` cohort that was released like any other and that no generated row could ever join. |
-| Published cohort size floored at `n_min` | At ε = 0.3 a 469-record cohort's noised size clipped to zero and the generator gave it 1 of 600 rows: a whole age band missing from the output while every per-row check passed. A cohort is released only because it holds `n_min` records, so the published size is clamped there (post-processing). |
-| Proportional row allocation | Uniform allocation over-represented a 2%-of-population cohort by 12×, so every marginal measured afterwards described a deliberately wrong mixture. |
-| Validation before spending | Privacy budget cannot be refunded, so schema conflicts are raised before the first query. |
-| `n_min` floor | A conditional rate over too few records is dominated by its own Laplace noise. |
-
-Run them with `pytest tests/`. Each test is named after the defect it prevents.
-
-## Accurate absolute rates: cell-wise generation
-
-`Generator.generate()` asks the model for a mixed batch of records and lets it allocate them across
-the released conditional cells, which caps how finely any one cell's rate can be expressed. On UCI
-Adult with 12 rows per call, `education = Masters` receives 0.65 rows per call, so it can only emit
-0% or 100%; its released rate of 0.554 exceeds a half, so it rounds to 100% every time. Measured end
-to end this gave MAE 0.253 and slope 1.64: rates below about 0.19 were accurate and rates above about
-0.24 saturated towards 1.0. The apparent rate threshold was an artefact: on this dataset the rare
-education values happen to be the high-income ones.
-
-`Generator.generate_by_cell()` removes the coupling. Each call covers exactly one released cell, so
-the row count is known, and the prompt states the outcome as an integer count ("exactly 7 of these
-12 records must have income = '>50K'") rather than a probability. The model has no discretion over
-the target column, and the residual error is bounded by the stochastic rounding of a single row.
-
-| | released | `generate()` | `generate_by_cell()` |
-|---|---|---|---|
-| Masters | 0.554 | 1.000 | **0.625** |
-| Bachelors | 0.419 | 0.968 | **0.408** |
-| Assoc-acdm | 0.238 | 0.818 | **0.300** |
-| Some-college | 0.190 | 0.189 | 0.206 |
-| HS-grad | 0.159 | 0.148 | 0.155 |
-| | | MAE **0.253**, slope 1.64 | MAE **0.037**, slope 1.19, r 0.99 |
-
-These figures are one development run on UCI Adult with Claude Fable 5 (12 rows per call, one draw)
-and are not among the paper's audited numbers. The paper's audited measurement of the same change is
-on the constructed registry, where conditional magnitude error fell from 0.155 to 0.002 (technical
-report, Appendix E).
-
-```python
-synthetic = gen.generate_by_cell(release, n_rows=5000)   # accurate absolute rates
-```
-
-**Use `generate_by_cell()` whenever absolute conditional rates matter**: a readmission probability,
-a default rate, anything a regulated decision consumes. It costs more calls for the same output size
-(34 calls for 300 rows here, against 25). `generate()` remains available and is adequate when only
-relative ordering is needed.
-
-Two caveats remain. Rounding is stochastic, so a cell allocated very few rows still carries up to
-half a row of error in a single draw; draw more records, which is free. And this was measured on one
-dataset with one model, so run a small live batch against your own schema and compare the per-cell
-rates of the output with the release before relying on the numbers.
-
-### The coverage guard, and what it does not cover
-
-Cell-wise generation emits rows only for released cells, so any band of a conditioning column that
-no released cell names is produced at essentially rate zero. On one health-survey release that erased
-four of six racial groups to exactly 0.000 while aggregate fidelity and downstream utility both
-stayed healthy. So `generate_by_cell()` refuses when any conditioning column has less than 90% of
-its released marginal mass inside released bands. It names the offending column and points at the
-settings that change it (`n_min`, conditional depth). The check reads the release only, so it costs
-no budget. Override with `allow_low_coverage=True`, for measurement rather than for use.
-
-**Treat this as a heuristic mitigation, not a solved problem.** The guard answers one question
-soundly and for free: which bands of a column did the released cells span? It does not answer the
-one next door: what is inside a band they did span? On a coarsened high-cardinality categorical
-those differ, and a column scoring 100% coverage was still destroyed. Its cells were keyed on an
-opaque group label, the generator was told which values were legal and not how often each occurs,
-and it spread them near-uniformly: a discharge code at 59.2% of real records came out at 14.3%, which
-is 1/7 on a seven-member group. This tool now expands every coarsened group into its members with
-their within-group shares, a renormalisation of proportions already in the release that costs no
-budget, and that repairs it on both vendors' models we tested. But a fix for one named failure mode
-is not a guarantee about the mapping in general: **establishing when a DP conditional table can be
-conveyed to a language model without silent loss is an open problem.** A passing guard is evidence
-that one failure mode is absent. Compare per-column output against the release anyway.
-
-## Stage C: the utility transmission bound
-
-Stage A spends the budget, Stage B decodes the release, and Stage C answers the question a release
-package has to answer without the private data: how far can the synthetic conditional structure be
-from the private one? For each released cell it releases a Laplace estimate of the private target
-rate at a declared budget `epsilon_cert` and turns the noise into a one-sided bound that holds
-simultaneously over every cell with probability at least `1 - alpha`. The Laplace scale uses the
-public suppression floor `n_min`, never the private cell size, so it is pure epsilon-DP, and the
-spend appears in a ledger like every other query.
-
-```python
-from cortec import bound_with_controls
-
-report = bound_with_controls(schema, release, private_df, synthetic, holdout_df,
-                             epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
-print(report.summary())            # headed UTILITY TRANSMISSION BOUND; a utility claim
-report.to_json("bound.json")       # the report a third party can read without the private data
-```
-
-`holdout_df` must be real data that was not used to build the release. It supplies the ceiling (a
-real sample, which should clear the tolerance) and the floor (the same sample with its target
-permuted, which must not). All three conditions are scored against one noisy release of the private
-rates, so `epsilon_cert` is spent once; the deployment total is `epsilon_release + epsilon_cert`, and
-the report states it per row and per person. If the ceiling fails or the floor clears, the test did
-not discriminate and `report.verdict` is `None`: do not report that run.
-
-Three things the bound will not do, by construction. It scores a released cell the synthetic data
-never covers at the trivial bound of 1.0, so a bound cannot be obtained by covering a convenient
-subset of the cells. It reports cells with fewer than 20 synthetic rows as thin rather than trusting
-them. And it draws its noise from an unseedable source, because a seeded draw would let anyone
-holding the seed subtract the noise and recover the private rate. It is a utility bound. The report's
-`_what_this_is` block says so, its `_standards_not_claimed` block names the privacy frameworks it
-must not be mapped to, and nothing in it is presented as a privacy guarantee.
-
-## Model support
-
-Two things decide output quality, and only one of them is the model.
-
-**Enable reasoning.** This is the single largest effect we measured, and it is free to get right.
-On one model tested against itself, with the same release, the same prompts, one flag changed and
-three draws per arm, conditional error moved from 0.173 ± 0.032 to 0.045 ± 0.007, a 3.8×
-improvement (Cohen's d = 5.48). That takes it from worse than a no-information control (0.152) to
-among the best generators measured. `Generator(..., reasoning="on")` is the default.
-
-The trap is the economics. The suppressed setting is 14.5× cheaper, and across the same three draws
-per arm downstream utility does not separate at all: TSTR-LR reads 0.786 ± 0.050 suppressed against
-0.802 ± 0.025 enabled, well inside one standard deviation. So a team optimising cost against a
-standard TSTR check does not see a small difference and accept it. It sees no measurable difference,
-concludes correctly on that evidence, and ships a pipeline carrying none of their data's conditional
-structure. Only a conditional measure reveals it. We previously reported reasoning as improving
-downstream utility too; at one draw it appeared to, it did not survive replication, and we withdrew
-it.
-
-**Verify that reasoning fired.** Setting the flag is not evidence. We once read a model's reasoning
-as intermittent, a large count in one batch and none in another, and it was our instrument: the two
-batches ran on different transports, and one of them reports no count at all. A count that was never
-reported is not a count of zero. The tool keeps the two states apart and warns you:
-
-```python
-gen.stats.thinking_tokens            # total reported reasoning tokens
-gen.stats.calls_without_reasoning    # calls that REPORTED zero while reasoning="on"
-gen.stats.calls_reasoning_unmeasured # calls on which the vendor reported no count at all
-gen.stats.calls_with_reasoning_block # calls where a reasoning block was present (Anthropic)
-gen.stats.positives_off_by_more_than_one  # cell-wise calls whose emitted positive count missed the
-                                          # "exactly k" it asked for by more than one row
-gen.stats.warnings                   # explicit warnings for each of the above
-```
-
-Both generation methods append one provenance column to their output, `_cohort` for `generate()`
-and `_cell` for `generate_by_cell()`, naming the released unit each row was generated for. Drop it
-before use if your consumer expects the schema's columns only.
-
-### Backends
-
-| backend | enterprise surface | reasoning control |
+| Parameter | Default | What it does |
 |---|---|---|
-| `anthropic` | **Claude on AWS Bedrock** (recommended); the public `api.anthropic.com` also works but is not the recommended deployment surface | on by default |
-| `openai` | **GPT on Azure OpenAI** (recommended); the public `api.openai.com` also works but is not the recommended deployment surface | on by default; `reasoning="suppressed"` sends `reasoning_effort="minimal"`; this vendor's `"low"` is not low, and only `"minimal"` reaches zero |
-| `gemini` | **Gemini on Google Vertex AI** (recommended); the public `generativelanguage.googleapis.com` also works but is not the recommended deployment surface | on by default; suppression is best-effort, since this vendor rejects a zero thinking budget outright |
-| `ollama` | **not an enterprise surface — out of deployment scope** | no reasoning mode on the models we measured; provided for reproducing the paper's scientific controls, and the capability gate refuses these models by default |
+| `backend`, `model` | `"anthropic"`, `"claude-fable-5"` | the vendor and the model; the model must pass the capability gate (below) |
+| `surface`, `surface_model` | `"public"`, `None` | the enterprise surface and the identifier it expects (step 2) |
+| `reasoning` | `"on"` | `"suppressed"` is measured to be 3.8× worse on conditional error; the tool warns if you choose it |
+| `rows_per_call` | `25` | rows requested per model call |
+| `quota` | `True` | give every batch the exact per-bin, per-category and per-outcome counts it owes |
+| `budget_usd` | `None` | a spend cap from the vendor's reported token counts at list prices; the run stops when it is reached and keeps what it has |
+| `request_timeout`, `max_retries` | `120.0`, `3` | the per-call timeout in seconds, and the retries per batch |
+| `allow_unvalidated` | `False` | run a model not in the measured set; verify transmission on your own data first |
+| `acknowledge_insufficient` | `False` | run a model measured as insufficient or sweep-only, for reproducing that finding rather than for use |
 
-**Which endpoint to point this at.** For regulated data, use the enterprise-hosted, tenant-isolated
-surface in your own cloud account, that is Bedrock, Azure OpenAI or Vertex AI, with private
-networking, data residency, contractual exclusion of training on inputs, and a BAA where HIPAA
-applies. The vendors' public developer APIs are supported by these backends but are not recommended
-for regulated deployment. The weights are the same; the contract and the network path are not, and
-those are what a compliance review assesses. CoRTeC's privacy argument does not depend on the
-endpoint, because the request carries only the DP release, but its compliance argument does. The
-paper's own experiments ran against the public APIs; §6.2 of the paper discloses this and says which
-results that affects.
+Three generation methods:
 
-**Reaching the enterprise surface.** Pass `surface=` and, where the surface names models
-differently, `surface_model=`; `model` stays the validated profile name that the capability gate and
-the price table key on. The request, the reasoning control and the response handling are identical
-to the public path. Only the client class, its credential flow and the model identifier change:
+- **`generate_selected(release, n_rows, pool_factor=3)`** is the default recommendation. It
+  generates `pool_factor × n_rows` records cohort by cohort, keeps the `n_rows` whose cell counts
+  match the release, and redraws each numeric value inside its released bin in the cohorts that
+  carry class-conditional blocks (`sub_bin="generator"` keeps the model's values). Both steps read
+  only the release, so they cost no privacy budget; the cost is `pool_factor` times the generation
+  spend.
+- **`generate(release, n_rows)`** is the same without the pool. It is adequate when relative
+  ordering is all you need.
+- **`generate_by_cell(release, n_rows, level=0)`** makes one call per released conditional cell
+  with an integer positive count. Use it when absolute conditional rates matter, such as a
+  readmission probability or a default rate. It refuses when any conditioning column has less than
+  90% of its released marginal mass inside released bands, because rows outside those bands would
+  be missing from the output while every aggregate check still looked healthy;
+  `allow_low_coverage=True` overrides, for measurement rather than for use. Treat that guard as a
+  heuristic mitigation, not a solved problem: it checks which bands the released cells span and not
+  what happens inside a band, and establishing when a DP conditional table can be conveyed to a
+  language model without silent loss is an open problem. Compare per-column output against the
+  release anyway.
 
-```python
-# Claude on AWS Bedrock: AWS credentials from the standard chain (env, profile, instance role)
-#   pip install 'cortec[bedrock]'   AWS_REGION=eu-central-1
-gen = Generator(schema, backend="anthropic", model="claude-fable-5", surface="bedrock",
-                surface_model="anthropic.claude-fable-5-v1:0")      # model id or inference-profile ARN
-
-# GPT on Azure OpenAI: AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY (AZURE_OPENAI_API_VERSION optional)
-gen = Generator(schema, backend="openai", model="gpt-5", surface="azure",
-                surface_model="gpt5-prod")                          # your DEPLOYMENT name
-
-# Gemini on Vertex AI: Application Default Credentials; GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION
-gen = Generator(schema, backend="gemini", model="gemini-3.5-flash", surface="vertex")
-```
-
-A missing setting or a surface/backend mismatch fails at construction, before any client exists.
-`gen.describe_surface()` is one line for your audit trail, and a run on the public surface says so
-in `gen.stats.warnings`.
-
-**What is verified, exactly.** The tests construct the SDKs' real client classes offline and replace
-only the transport, so an SDK constructor drift fails in CI rather than at your first call. And
-**Vertex AI is verified live**: Gemini 3.5 Flash through a service account holding only
-`roles/aiplatform.user`, both generation paths, reasoning reported on every call. Two things that
-run taught us: the newest Gemini models are served from the `global` location and return 404 in
-every regional one (set `GOOGLE_CLOUD_LOCATION=global`), and a model 404 is now a fatal, non-retried
-error. **What is not verified:** a live round trip on Bedrock or Azure OpenAI, because no account was
-available to us. Treat your first run there as that test: generate a small batch, check
-`gen.stats.calls_with_reasoning_block` and `thinking_tokens`, and compare the output to the release
-before generating at scale.
-
-### Capability gating
+**Which model.** Capability is gated before any call, because a model too weak to follow the
+release produces well-formed, plausible rows that carry none of its structure, and no output check
+reveals that.
 
 | Model | Tier | Magnitude error (transmission sweep) |
 |---|---|---|
@@ -505,54 +288,125 @@ before generating at scale.
 | qwen2.5:32b, qwen2.5:14b | adequate | 0.098–0.105 |
 | qwen2.5:7b | **insufficient — refused** | 0.406 |
 
-### Which model to use
+`print(cortec.models.recommended_table())` lists the models we recommend, measured on
+full-dataset generation: Gemini 3.1 Pro, GPT-5 at its default reasoning, Claude Fable 5, Claude
+Opus 5 and Gemini 3.5 Flash. A sweep-only model reproduces one forced rate in a short prompt but,
+on full-dataset generation, is close to indistinguishable from an unconditioned prompt; the design
+notes give the measurements. An unlisted model is refused unless you pass `allow_unvalidated=True`.
 
-We recommend the models we measured on full-dataset generation:
+**Enable reasoning, and verify that it fired.** Reasoning is the largest single effect measured. On
+one model tested against itself, conditional error moved from 0.173 ± 0.032 to 0.045 ± 0.007 with
+one flag changed, while downstream utility did not separate (0.786 ± 0.050 against 0.802 ± 0.025).
+A cost comparison on utility alone would therefore choose the 14.5× cheaper setting and ship output
+carrying none of the data's conditional structure. Setting the flag is not evidence that it fired:
+some transports report no reasoning-token count at all, and a count that was never reported is not
+a count of zero. The stats keep the states apart:
 
 ```python
-from cortec.models import recommended_table
-print(recommended_table())
+gen.stats.thinking_tokens              # total reported reasoning tokens
+gen.stats.calls_without_reasoning      # calls that REPORTED zero while reasoning="on"
+gen.stats.calls_reasoning_unmeasured   # calls on which the vendor reported no count at all
+gen.stats.calls_with_reasoning_block   # calls where a reasoning block was present (Anthropic)
+gen.stats.positives_off_by_more_than_one   # cell-wise calls that missed the "exactly k" by > 1 row
+gen.stats.warnings                     # one explicit warning for each condition above
 ```
 
-An unlisted model is refused unless you pass `allow_unvalidated=True`, and if you do, verify
-transmission on your own data before trusting any output. The sweep-only tier is why.
+**After the run**, read `gen.stats`: `calls`, `parse_ok`, `rows`, `rows_requested`,
+`rows_out_of_bounds`, `rows_undeclared_category`, `rate_limit_waits`, `spend_usd`. Rows outside
+the declared domain or carrying an undeclared category are dropped and counted, never kept. The
+output carries one provenance column, `_cohort` (or `_cell` for cell-wise generation), naming the
+released unit each row came from; drop it if your consumer expects the schema's columns only.
 
-**Read the sweep-only tier carefully, because it is the trap this table exists to prevent.** The
-transmission sweep asks whether a model reproduces a released rate, one large, salient signal in a
-short prompt. Two self-hosted 70B models pass it inside the frontier band, and on that basis this
-table used to call them validated and recommend them. Re-measured on full-dataset generation at
-three draws, `llama3.3:70b-instruct` closes 12% of the conditional-error gap to an unconditioned
-prompt, closes nothing at all on 2-way total variation (0.238 against the control's identical 0.238),
-and is worse than that control on 1-way total variation. On the metrics this method exists to
-improve, its output is close to indistinguishable from asking a model for plausible records with no
-conditioning, and no output check reveals it. Passing the sweep is necessary, not sufficient. These
-models are now refused by default and run only under `acknowledge_insufficient=True`.
+**Dry run first.** `backend="mock"` needs no key and honours the exact-count block, so the whole
+generate-and-select loop runs end to end offline; `tests/test_selection.py` does exactly that.
 
-Capability is family-dependent, not just size-dependent: at comparable scale a 24B model recorded
-lower error than a 32B one, so a size threshold alone would be wrong.
+## 7. Stage C: attach a utility bound
 
-**Some models are measured but not listed, and the gate tells you so.** GPT-5 and Gemini 3.1 Pro
-were measured on full-dataset generation (conditional error 0.045 and 0.041, both inside the band of
-the validated frontier models and below what a real 300-record sample achieves) but not on the
-transmission sweep every tier above is scored against. Those are different experiments and their
-numbers are not interchangeable: a model can track a forced rate in three cohorts while attending
-weakly to a full multi-level table, and nothing in the output says which is happening. So they are
-still gated, and the refusal message reports exactly what we do and do not know.
+For each released cell, Stage C releases a Laplace estimate of the private target rate at a
+declared budget `epsilon_cert` and turns the noise into a one-sided bound on the gap between the
+private and the synthetic rates. The bound holds simultaneously over every cell with probability at
+least `1 − alpha`. It is a utility bound computed under DP, and it is not a privacy audit.
 
-### A withdrawn claim
+```python
+from cortec import bound_with_controls
 
-An earlier version of this README stated that 70B-class models are "validated and self-hostable, so
-a regulated deployment needs no external API and no data leaves the institution." We withdraw the
-first half. That validation was measured on the transmission sweep. On full-dataset generation the
-same class of model closes only 12% of the gap between an unconditioned prompt and a frontier model
-on conditional-seen error, 20% on held-out, nothing at all on 2-way total variation, and is worse
-than an unconditioned prompt on 1-way. The failure is silent and the marginal metrics do not reveal
-it.
+report = bound_with_controls(schema, release, private_df, synthetic, holdout_df,
+                             epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
+print(report.summary())
+report.to_json("bound.json")       # readable by a third party without the private data
+```
 
-The second half was never the load-bearing part. Because the prompt carries a DP release and never a
-record, an enterprise endpoint under your own tenancy is available to you, and the generator choice
-is a quality decision. If you do run local weights, verify conditional fidelity on your own data
-first.
+- `holdout_df` is real data that was not used to build the release. It supplies the ceiling (a real
+  sample, which should clear the tolerance) and the floor (the same sample with its target
+  permuted, which must not). If the ceiling fails or the floor clears, the test did not
+  discriminate, `report.verdict` is `None`, and that run is not reported.
+- `epsilon_cert` is spent once, through the ledger. The deployment total is
+  `epsilon_release + epsilon_cert`, stated per row and per person. The Laplace scale uses the
+  public floor `n_min`, never the private cell size, so the bound is pure ε-DP.
+- A released cell the synthetic data never covers scores the trivial bound of 1.0, so a bound
+  cannot be obtained by covering a convenient subset; cells with fewer than 20 synthetic rows are
+  reported as thin. The noise is unseedable. The report's `_what_this_is` and
+  `_standards_not_claimed` blocks say what it is and which privacy frameworks it must not be mapped
+  to.
+
+## 8. Evaluate the output
+
+Never against a bare threshold. Score the synthetic data beside two references built from real
+data of the same size: a real sample, which is the ceiling a synthetic method can reach at that
+size, and the same sample with its target column permuted, which is the floor of data that carries
+no usable information. Report fidelity and utility together, because a method can score well on
+one and poorly on the other, and read the conditional measures beside the aggregate ones. Also
+compare each declared categorical's full support with the release: a category present in the
+release and absent from the output is a representativeness failure that no aggregate metric
+reports.
+
+**What to expect.** On UCI Adult at n = 300, models trained on this package's output were
+statistically indistinguishable from models trained on a real sample of the same size, with
+differences of +0.007, −0.003 and +0.012 AUC across three students and every p > 0.18. On a
+finance dataset the pooled release fell short (TSTR-LR 0.652 against a real sample's 0.695, about
+94% of real-sample utility), and the configuration this package ships by default brought all three
+students within 0.015 AUC of the floor on both datasets. That is a result at n = 300 under one
+generator family. At larger sizes the point estimates favour the real sample, because a fixed
+release does not get richer as you ask for more records. Do not assume parity: measure it on your
+own data against a real sample of matched size. The design notes carry the full measurements.
+
+## 9. Where the trust boundary sits
+
+No private record is ever sent to the model. The prompt carries only released statistics: noised
+histograms, class balances and a conditional table. Generation is post-processing of a DP release,
+so by post-processing immunity whoever runs the model learns nothing beyond what the release
+already discloses, and the ε guarantee does not depend on where that computation happens. The
+decoder may be a tenant-isolated enterprise endpoint under a BAA or an air-gapped model on your own
+hardware; the argument is the same, and what differs between those is capability, not trust.
+
+The guarantee says nothing about the model's pretraining corpus. If a private record was in it,
+that happened before this tool ran. The sharper version of the concern is that conditioning on
+true marginals for a narrow stratum resembles a prompt-based extraction attack, because it tells
+the model which region to sample from. DP does not exclude this. In the research behind this tool,
+four membership-inference attacks, each validated on a positive control, found no advantage above
+chance and zero exact matches on any dataset. That is evidence about the published output, not a
+proof about the corpus.
+
+## 10. Troubleshooting
+
+| What you see | Why | What to do |
+|---|---|---|
+| `DataValidationError` before any query | a column is missing, the target has an undeclared label or one class only, or a numeric column has no usable values | fix the data or the schema; no budget was spent |
+| `SchemaError: stratify bands ... must tile its declared domain` | a gap or an overlap between bands | make the bands contiguous from `lo` to `hi` |
+| `ReleaseError: n_min=... is below the safe floor of 50` | a rate over fewer records is dominated by its noise | raise `n_min`, or coarsen the conditional levels |
+| `ReleaseError: no cohort reached n_min` or `the conditional target table is empty` | too few records per cohort or cell | coarsen the stratification or the levels, lower `n_min`, or supply more records |
+| `ReleaseError: REFUSED: max_rows_per_person=...` | the per-person ε would exceed 10 | cap or aggregate rows per person, lower `epsilon_total`, or acknowledge a row-level guarantee |
+| a printed warning that part of the conditional budget was not spent | some declared levels released no cell | use fewer levels, lower `n_min`, or supply more records |
+| a printed warning that a level's noise is at or above the spread of its rates | the table is noise-dominated | raise ε, coarsen to fewer cells, or accept that conditioning will not help on this data |
+| `ModelCapabilityError` | the model is unmeasured, sweep-only or insufficient | use a recommended model, or opt in with the flag the message names and verify on your own data |
+| `PromptIntegrityError` | a prompt template was modified in memory, or the conditional table is empty | do not edit the templates; register a variant under a new name if you must |
+| `ContextTruncationError` | the prompt plus the output budget exceeds a local model's context | raise `num_ctx` or lower `rows_per_call` |
+| `EmptyContentError` | a reasoning model spent its output budget before writing any CSV | raise the output budget; `ModelRefusalError` is the different case of a refusal, which needs a coarser cell or a different generator |
+| `FatalAPIError` | billing, quota, credentials, or a model the surface does not serve | fix the account or the model name; nothing was retried and the release is unchanged |
+| the run waits and `rate_limit_waits` rises | the vendor asked it to wait | nothing; the waits back off from 15 s to 4 min before an error surfaces |
+| `GenerationError: spend cap reached`, or a yield abort | the cap was hit, or most returned rows were dropped | raise `budget_usd`, or check the schema against the rows being dropped |
+| `select_to_release` refuses the pool | a run that stopped early left cohorts short of the rows they owe | generate the full pool; `allow_short_pool=True` proceeds with a warning |
+| `generate_by_cell` refuses the release | a conditioning column has under 90% of its mass in released bands | lower `n_min` or use a coarser level, or generate cohort-wise |
 
 ## Licence
 

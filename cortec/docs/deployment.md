@@ -1,19 +1,125 @@
-# Deploying CoRTeC: controls, failure modes, checklist, patterns and cost
+# Deploying CoRTeC: the operational manual
 
-This is the operational manual for the reference implementation. It is ported from Appendix G and
+This manual is for the team that runs CoRTeC on regulated data. It is ported from Appendix G and
 Appendix H.8 of the CoRTeC technical report (`paper/CoRTeC.md` in the research repository), which
-is the authoritative source. Section references of the form §x.y and bracketed citations [n] refer
-to that report. The arXiv paper (`paper/CoRTeC_arxiv.pdf`) carries the condensed version of this
-material in its Appendix C.
+is the authoritative source; section references of the form §x.y and bracketed citations [n] refer
+to that report, and the arXiv paper carries a condensed version in its Appendix C. Every control
+here is enforced in the `cortec` package rather than documented as advice, and each failure mode
+corresponds to a regression test in `tests/` named after the defect it prevents.
 
-The utility transmission bound is Stage C of the pipeline (Stage A is the release, Stage B the
-generation). The package ships it as `cortec.bound` (`bound_with_controls`), and step 9 of the
-checklist below is run with it.
+Read it in this order. Section 1 is the architecture on one page. Section 2 is the checklist, step
+by step. Sections 3 and 4 are what a compliance review asks for: the controls mapped to standards,
+and the failure modes with the guardrail for each. Sections 5 and 6 are the two deployment
+patterns and the cost model.
 
-Every control below is enforced in the `cortec` package rather than documented as advice, and each
-failure mode corresponds to a regression test in `tests/` named after the defect it prevents.
+## 1. The architecture on one page
 
-## 1. Controls, mapped
+Three trust zones, and one artefact that crosses between them.
+
+**Zone 1, regulated.** The institution's own VPC or premises. It holds the system of record (the
+EHR, core banking or registry table with PHI or PII), the schema declaration (column list, public
+bounds, public bin edges, target, and the maximum rows per person), and Stage A, the DP release
+engine. Stage A forms the cohorts from the public stratification rule at ε = 0, releases DP
+histograms per cohort and class, the DP conditional table and DP sizes, charges auto-configuration
+where it is used, and writes the release artefact `R`: noisy counts only, with an audit trail
+recording every query, its ε, its sensitivity and its composition rule. No private record leaves
+this zone.
+
+**The trust boundary.** Only `R` crosses. Everything below it is post-processing and adds nothing
+to ε.
+
+**Zone 2, the tenant-isolated model platform.** Bedrock, Azure OpenAI or Vertex AI in the
+institution's own account, with private networking, no training on inputs, data residency and a
+BAA. It runs the guardrails (the hash-locked prompt, the capability gate, the domain and category
+checks, the coverage guards, the spend cap, rate-limit backoff and yield checkpoints) and Stage B:
+generation from `R` by a frozen model with reasoning enabled, as exact-count batches per cohort,
+then a k× pool, selection to `R`, and the sub-bin redraw. It is repeatable without limit, and ε is
+unchanged.
+
+**Zone 3, synthetic data, freely shareable.** The synthetic dataset, at any size and with unlimited
+redraws; Stage C, the utility transmission bound, which is a utility claim under DP and not a
+privacy audit; and the release package (the dataset, the audit trail, the bound and the DP claim
+block) for training, vendor evaluation or sharing.
+
+## 2. The deployment checklist
+
+Each step says what to do, why, and which call or setting does it.
+
+**Step 1. Declare the schema from public knowledge only.** The column list, the domain bounds, bin
+edges from clinical or regulatory convention (WHO BMI categories, ACC/AHA blood-pressure stages),
+and the target. Never from quantiles of your own file. Call: `Schema(...)`.
+
+**Step 2. Establish the privacy unit, and reduce it if you must.** Count rows per individual. If
+the maximum `k` is 1, `ε_person = ε_row` and there is nothing to do. If it is greater,
+`ε_person = k · ε_row`, and on encounter-level data that is routinely vacuous, so, in this order:
+
+- **(a) Cap each person's contribution** to their first `C` rows before Stage A, choosing the
+  smallest `C` whose `ε_person = C · ε_row` your regulator will accept. This is pure preprocessing.
+  It leaves the quantity you are estimating alone, and on Diabetes 130 it is 6.3× more accurate
+  than aggregating at the same ε_person (§4.4).
+- **(b) Aggregate to one row per person before Stage A** only when a per-patient quantity is what
+  you actually want. It fixes `k` exactly, but it changes the estimand, and nothing downstream will
+  tell you so.
+- **(c) Failing either, report `ε_person = max_rows · ε_row`** rather than the per-row number, and
+  make no per-person claim.
+
+After capping, re-check released-cell coverage (step 5): capping shrinks cells, and cells that fall
+under `n_min` stop being released. This step is the answer to the ε_person = 80 figure of §4.4,
+and it is enforced rather than recommended: `certify.py` requires `--max-rows-per-person` and will
+not produce a bound report without it, and the reference implementations refuse a declared privacy
+unit whose `ε_person` is vacuous unless the caller acknowledges it into the audit trail. Call:
+`release_statistics(..., max_rows_per_person=k)`.
+
+**Step 3. Choose ε and n.** Output quality was essentially unchanged over ε ∈ [0.3, 8] on Diabetes
+130 (81,410 records). On NHANES (2,999 records) the shipped configuration lost a fifth of its
+utility between ε = 2 and ε = 0.3, and the release's own noise-to-signal ratio predicts this before
+generation (§7.6, §H.2). Pick the tightest budget your regulator will accept, and read the
+release-time check of step 5 before generating. Settings: `epsilon_total`, `n_records`.
+
+**Step 4. Run Stage A once.** Store `R` and its audit trail as the controlled artefact. Hash it. `R`
+cannot be regenerated: the noise source is cryptographically secure and ignores any seed you set,
+which we verified directly, so the stored artefact is the only copy of that release. Every draw and
+every comparison must reuse it by file, not by re-running Stage A. Call: `release_statistics(...)`,
+`release.to_json(path)`.
+
+**Step 5. Check the release before generating.** Is the finest conditional table non-empty? Is the
+noise-to-signal ratio below 1? How many cells cleared `n_min`, and for each conditioning column,
+what share of its mass lies in bands the surviving cells actually name? Cell-wise generation
+produces essentially nothing outside them, so an uncovered band silently deletes that slice of the
+population (§7.10). This is computable from the release itself, so the check costs no budget. Read:
+`release.conditional_levels`, the release-time warnings, and the coverage guard's refusal message.
+
+**Step 6. Select a reasoning-capable model on an enterprise-hosted, tenant-isolated platform, and
+enable reasoning.** The scope note at the head of the technical report applies here: the
+recommendation is Claude on Bedrock, GPT on Azure OpenAI, or Gemini on Vertex AI, in the
+institution's own account, under the institution's own contract. The vendors' public developer
+APIs are not a substitute: the model is the same, the contract is not, and the contract is what a
+compliance review assesses. Our own measurements were made on those public APIs; §6.2 says so and
+says exactly which of our results that does and does not affect. Open-weight models appear in the
+technical report as scientific controls only. None of those we measured was run with a reasoning
+mode engaged (seven have none; `gpt-oss:20b` has one and ran uninstrumented at its default), and
+§H.15.3 reports what that costs. Verify that reasoning fired, not that you asked: read the
+reasoning-token count, and treat "no count reported" as unverified rather than as zero, because
+§7.5 documents a transport on which the count silently disappears. Budget for it: this is where the
+cost is. Settings: `Generator(backend=..., model=..., surface=..., reasoning="on")`; read
+`gen.stats.calls_with_reasoning_block` and `gen.stats.calls_reasoning_unmeasured`.
+
+**Step 7. Generate**, reusing `R`. Draw as many datasets as you need; they are free in ε. Call:
+`gen.generate_selected(release, n_rows, pool_factor=3)`.
+
+**Step 8. Evaluate against floors and a ceiling**, never against a bare threshold: a real sample at
+matched n, and the same data with the target permuted. Report fidelity and utility together. Also
+compare each declared categorical's full support against the release: a category present in the
+release and absent from the output is a representativeness failure that no aggregate metric
+reports.
+
+**Step 9. Bound** (Stage C), and attach the utility bound report, the audit trail and the DP claim
+block to the release package. Call: `bound_with_controls(...)`, `report.to_json(path)`.
+
+**Step 10. Re-verify after any change to the generator or its configuration.** A settings change
+alone moved conditional error by a factor of 3.8 in our measurements.
+
+## 3. Controls, mapped to standards
 
 | Control | Implementation | Standard |
 |---|---|---|
@@ -26,32 +132,32 @@ failure mode corresponds to a regression test in `tests/` named after the defect
 | Expert determination route | DP release (ε stated per person) + measured re-identification evidence: **not** the Stage C bound, which speaks to utility only | HIPAA Expert Determination [49] |
 | No training on inputs | contractual, via the tenant-isolated platform | vendor terms / BAA |
 
-**The Expert Determination row deliberately excludes Stage C.** HIPAA Expert Determination requires
-a statistical assessment of re-identification risk. The Stage C bound is a statement about how much
-conditional structure survived generation, a utility quantity, and mapping it to that route would be
-a category error with compliance consequences. The privacy weight in that row is carried by the DP
-release and the measured re-identification evidence alone.
+Three notes on reading this table.
 
-**The row above it is labelled carefully for the same reason.** A disclosure review assesses
-disclosure risk, which is a privacy function the Stage C bound does not perform. Calling the bound a
-disclosure review would repeat the Expert Determination error one row up. The bound is the documented
-utility half of a release package, fitness for use, budgeted and stated; the disclosure-risk half is
-carried by the re-identification row.
+- **The Expert Determination row deliberately excludes Stage C.** HIPAA Expert Determination
+  requires a statistical assessment of re-identification risk. The Stage C bound is a statement
+  about how much conditional structure survived generation, a utility quantity, and mapping it to
+  that route would be a category error with compliance consequences. The privacy weight in that
+  row is carried by the DP release and the measured re-identification evidence alone.
+- **The utility-claim row is labelled carefully for the same reason.** A disclosure review assesses
+  disclosure risk, which is a privacy function the Stage C bound does not perform. Calling the bound
+  a disclosure review would repeat the Expert Determination error one row up. The bound is the
+  documented utility half of a release package, fitness for use, budgeted and stated; the
+  disclosure-risk half is carried by the re-identification row.
+- **The bound report enforces that exclusion rather than relying on this table.** Its artefact
+  claims alignment with NIST SP 800-226 and SP 800-188 only, and carries a `_standards_not_claimed`
+  block that names HIPAA Expert Determination, ISO/IEC 27559, ISO/IEC 20889 and GDPR Art. 25
+  explicitly, with the reason for each and a pointer to where that weight actually sits. Naming
+  them is better than omitting them: a compliance reader who sees a short list cannot otherwise tell
+  a considered exclusion from an oversight.
 
-**The bound report enforces that exclusion rather than relying on this table.** Its artefact claims
-alignment with NIST SP 800-226 and SP 800-188 only, and carries a `_standards_not_claimed` block that
-names HIPAA Expert Determination, ISO/IEC 27559, ISO/IEC 20889 and GDPR Art. 25 explicitly, with the
-reason for each and a pointer to where that weight actually sits. Naming them is better than omitting
-them: a compliance reader who sees a short list cannot otherwise tell a considered exclusion from an
-oversight.
+Two things this architecture does not do, and a reviewer will ask. It does not make the generator's
+pretraining corpus part of the guarantee; if a private record was in that corpus it was compromised
+before CoRTeC ran. And the Stage C output is a utility transmission bound computed under DP: it
+bounds how much conditional structure was transmitted, and it must never be presented as a privacy
+audit.
 
-**Two things this architecture does not do, and a reviewer will ask.** It does not make the
-generator's pretraining corpus part of the guarantee; if a private record was in that corpus it was
-compromised before CoRTeC ran. And the Stage C output is a utility transmission bound computed under
-DP: it bounds how much conditional structure was transmitted, and it must never be presented as a
-privacy audit.
-
-## 2. Operational failure modes, and the guardrail for each
+## 4. Operational failure modes, and the guardrail for each
 
 These are not hypothetical. Each corresponds to a defect that produced a plausible but wrong result
 during this work, and each is enforced in code rather than documented as advice.
@@ -75,80 +181,19 @@ during this work, and each is enforced in code rather than documented as advice.
 | **A transient rate limit counted as failure** | two "try again later" responses in a row abort a run under the yield rule | rate limits waited out with exponential backoff before they count; billing and credential faults stay fatal |
 | **Stratification bands with a gap** | records at the domain maximum fall into a cohort no generated row can join | bands must tile the declared domain; the top band is closed at its upper edge |
 
-## 3. A deployment checklist
-
-1. **Declare the schema from public knowledge only:** the column list, the domain bounds, bin edges
-   from clinical or regulatory convention (WHO BMI categories, ACC/AHA blood-pressure stages), and
-   the target. Never from quantiles of your own file.
-2. **Establish the privacy unit, and reduce it if you must.** Count rows per individual. If the
-   maximum `k` is 1, `ε_person = ε_row` and there is nothing to do. If it is greater,
-   `ε_person = k · ε_row`, and on encounter-level data that is routinely vacuous, so, in this order:
-   - **(a) Cap each person's contribution** to their first `C` rows before Stage A, choosing the
-     smallest `C` whose `ε_person = C · ε_row` your regulator will accept. This is pure
-     preprocessing, it leaves the quantity you are estimating alone, and on Diabetes 130 it is 6.3×
-     more accurate than aggregating at the same ε_person (§4.4).
-   - **(b) Aggregate to one row per person before Stage A** only when a per-patient quantity is
-     what you actually want. It fixes `k` exactly, but it changes the estimand, and nothing
-     downstream will tell you so.
-   - **(c) Failing either, report `ε_person = max_rows · ε_row`** rather than the per-row number,
-     and make no per-person claim.
-
-   After capping, re-check released-cell coverage (step 5): capping shrinks cells, and cells that
-   fall under `n_min` stop being released. This step is the answer to the ε_person = 80 figure of
-   §4.4, and it is enforced rather than recommended: `certify.py` requires `--max-rows-per-person`
-   and will not produce a bound report without it, and the reference implementations refuse a
-   declared privacy unit whose `ε_person` is vacuous unless the caller acknowledges it into the
-   audit trail.
-3. **Choose ε and n.** Output quality was essentially unchanged over ε ∈ [0.3, 8] on Diabetes 130
-   (81,410 records). On NHANES (2,999 records) the shipped configuration lost a fifth of its utility
-   between ε = 2 and ε = 0.3, and the release's own noise-to-signal ratio predicts this before
-   generation (§7.6, §H.2). Pick the tightest budget your regulator will accept, and read the
-   release-time check of step 5 before generating.
-4. **Run Stage A once.** Store `R` and its audit trail as the controlled artefact. Hash it. `R`
-   cannot be regenerated: the noise source is cryptographically secure and ignores any seed you set,
-   which we verified directly, so the stored artefact is the only copy of that release. Every draw
-   and every comparison must reuse it by file, not by re-running Stage A.
-5. **Check the release before generating.** Is the finest conditional table non-empty? Is the
-   noise-to-signal ratio below 1? How many cells cleared `n_min`, and for each conditioning column,
-   what share of its mass lies in bands the surviving cells actually name? Cell-wise generation
-   produces essentially nothing outside them, so an uncovered band silently deletes that slice of
-   the population (§7.10). This is computable from the release itself, so the check costs no budget.
-6. **Select a reasoning-capable model on an enterprise-hosted, tenant-isolated platform, and
-   enable reasoning.** The scope note at the head of the technical report applies here: the
-   recommendation is Claude on Bedrock, GPT on Azure OpenAI, or Gemini on Vertex AI, in the
-   institution's own account, under the institution's own contract. The vendors' public developer
-   APIs are not a substitute: the model is the same, the contract is not, and the contract is what a
-   compliance review assesses. Our own measurements were made on those public APIs; §6.2 says so and
-   says exactly which of our results that does and does not affect. Open-weight models appear in the
-   technical report as scientific controls only. None of those we measured was run with a reasoning
-   mode engaged (seven have none; `gpt-oss:20b` has one and ran uninstrumented at its default), and
-   §H.15.3 reports what that costs. Verify that reasoning fired, not that you asked: read the
-   reasoning-token count, and treat "no count reported" as unverified rather than as zero, because
-   §7.5 documents a transport on which the count silently disappears. Budget for it: this is where
-   the cost is.
-7. **Generate**, reusing `R`. Draw as many datasets as you need; they are free in ε.
-8. **Evaluate against floors and a ceiling**, never against a bare threshold: a real sample at
-   matched n, and the same data with the target permuted. Report fidelity and utility together. Also
-   compare each declared categorical's full support against the release: a category present in the
-   release and absent from the output is a representativeness failure that no aggregate metric
-   reports.
-9. **Bound** (Stage C), and attach the utility bound report, the audit trail and the DP claim block
-   to the release package.
-10. **Re-verify after any change to the generator or its configuration.** A settings change alone
-    moved conditional error by a factor of 3.8 in our measurements.
-
-## 4. Two deployment patterns
+## 5. Two deployment patterns
 
 **Pattern A, CoRTeC.** The institution has enterprise model access and no public transfer set. This
 gives the highest standalone conditional fidelity and downstream utility; the cost is per record.
 
 **Pattern B, hybrid correction.** The institution already runs AIM or MST and will not put a
-language model in the data path at all. Keep the existing synthesiser; release a DP conditional table
-and relabel only its target column. This is pure post-processing of two already-DP artefacts. §8.2
-reports what it does and does not achieve, including three datasets where it reliably improves
-calibration and reliably reduces downstream AUC.
+language model in the data path at all. Keep the existing synthesiser; release a DP conditional
+table and relabel only its target column, with the `cortec-hybrid` package. This is pure
+post-processing of two already-DP artefacts. §8.2 reports what it does and does not achieve,
+including three datasets where it reliably improves calibration and reliably reduces downstream
+AUC.
 
-## 5. Computational and monetary cost
+## 6. Computational and monetary cost
 
 | method | fit cost | per-record generation cost | scaling behaviour |
 |---|---|---|---|
