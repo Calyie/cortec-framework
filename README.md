@@ -1,9 +1,10 @@
 # cortec-framework
 
 Two Apache-2.0 reference implementations of **CoRTeC**, cohort-conditioned differentially private
-synthetic tabular data from a frozen language model. This repository holds the software. The paper,
-the research harness and the result records every published number is re-derived from live in the
-companion repository [cortec](https://github.com/Calyie/cortec).
+synthetic tabular data from a frozen language model. This repository holds the software. The paper
+and the research harness live in the companion repository [cortec](https://github.com/Calyie/cortec);
+the per-draw result records every published number is re-derived from are retained by the authors
+and available on request.
 
 | Package | What it is | Tests |
 |---|---|---|
