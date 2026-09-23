@@ -1835,7 +1835,9 @@ def test_an_integer_coded_category_written_with_a_decimal_point_is_normalised_no
     g = Generator(schema, backend="anthropic", model="claude-fable-5")
     df = g.parse("x,sex,y\n3,2.0,1\n4,1.0,0\n5,3,1\n6,,0\n")
     assert list(df["sex"]) == ["2", "1"]
-    assert df["sex"].dtype == object and g.stats.rows_undeclared_category == 2
+    # a text column: object under pandas 2, the string dtype under pandas 3; never float
+    assert df["sex"].dtype == object or pd.api.types.is_string_dtype(df["sex"].dtype)
+    assert g.stats.rows_undeclared_category == 2
 
 
 def test_a_transient_rate_limit_is_waited_out_not_treated_as_fatal_or_as_a_failed_call(monkeypatch):
