@@ -4,8 +4,9 @@ cortec-hybrid — conditional-signal correction for a marginal DP synthesiser, w
 **What this tool claims, precisely.** Marginal-based DP synthesisers (AIM, MST, PrivBayes) are
 excellent at the statistic they optimise — low-order marginals — and are evaluated on it in their
 own papers. Neither AIM's nor MST's paper reports a downstream predictive-utility experiment, and
-in our measurements that omission is consequential: at matched budget and sample size, models
-trained on their output reached 0.66-0.73 AUC where a real sample of the same size reached 0.86.
+in our measurements that omission is consequential: at matched budget and sample size on UCI Adult,
+models trained on their output reached 0.675 to 0.728 AUC where a real sample of the same size
+reached 0.834 to 0.872 (technical report, section 7.2).
 
 This tool spends a *small, separately accounted* slice of the privacy budget on one thing those
 mechanisms do not target: a conditional target table, P(y | cell) over a disjoint partition. It
@@ -14,9 +15,9 @@ relabelling is pure post-processing of two already-private artifacts, so it adds
 beyond the table itself.
 
 **What this tool does NOT claim.** It is not "CoRTeC without the LLM", and it is not a general
-improvement over its inputs. In our own runs a coarse 12-cell table with i.i.d. resampling — the
-obvious implementation — bought essentially nothing (+0.002 AUC). The gain requires a *rich*
-table, and it is worth having in one specific situation: your marginal synthesiser's output has
+improvement over its inputs. In our own runs a coarse 12-cell table, the obvious implementation,
+fixed calibration and added little utility (+0.025 AUC on AIM, +0.037 on MST). The gain requires a
+*rich* table (technical report, section 8.2), and it is worth having in one specific situation: your marginal synthesiser's output has
 weak conditional target structure and you need a calibrated rate. Measure before and after with
 `estimate_gain()`; if the gain is small, use the marginal synthesiser alone and keep the budget.
 
@@ -276,7 +277,7 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
     for cell, part in data.groupby(keys):
         if len(part) < n_min:
             continue
-        # Same correction as cortec's release.py (review A1): a bounded-mean rate noised at
+        # Same correction as cortec's release.py (technical report, section 4.3): a bounded-mean rate noised at
         # scale 1/(|cell|·eps) has a data-dependent scale under add/remove-one adjacency and is
         # not pure eps-DP. Release the positive COUNT (sensitivity exactly 1) and divide by the
         # separately charged noised support, floored at the public n_min. The published rate is
@@ -341,8 +342,8 @@ def relabel(schema: Schema, synthetic: pd.DataFrame, table: ConditionalTable, *,
         diabetes         MST 0.581 -> rank 0.528 (-0.053) -> i.i.d. 0.549 (-0.032)
         adult            MST 0.705 -> rank 0.788 (+0.083) -> i.i.d. 0.821 (+0.116)
 
-    i.i.d. beat ranking in **9 of 9 runs**. The earlier claim that i.i.d. "bought essentially
-    nothing (+0.002 AUC)" does not survive replication.
+    i.i.d. beat ranking in **9 of 9 runs**. An earlier version of this module claimed that i.i.d.
+    assignment "bought essentially nothing (+0.002 AUC)"; that claim did not survive replication.
 
     Why the guard did not catch it: `_rank_scores` gated on whether the synthetic target is
     PREDICTABLE from the synthetic features (CV AUC >= RANK_INFORMATIVENESS_FLOOR). A synthesiser

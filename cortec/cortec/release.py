@@ -457,7 +457,7 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
                 # 1/(|cell|·eps), depends on |cell| -- which under add/remove-one adjacency is
                 # itself private and differs between neighbouring datasets. Two Laplace densities
                 # with different scales have an unbounded ratio in one tail, so it is not pure
-                # eps-DP (review A1). Release the POSITIVE COUNT instead: a counting query of
+                # eps-DP (technical report, section 4.3). Release the POSITIVE COUNT instead: a counting query of
                 # sensitivity exactly 1 at a scale that depends on nothing private. The cell
                 # size is the already-charged noised support below. The published rate is their
                 # ratio -- post-processing of two DP-released quantities -- with the denominator

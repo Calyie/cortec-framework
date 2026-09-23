@@ -513,7 +513,7 @@ class Generator:
         # model against itself, same release and same prompts, with only this flag changed:
         # conditional error 0.173 -> 0.045, a 3.8x improvement, moving the same model from BELOW
         # a no-information control to among the best generators measured. The suppressed setting
-        # is 14.8x cheaper and still scores 95% of a real sample's downstream utility, so a user
+        # is 14.5x cheaper and still scores 95% of a real sample's downstream utility, so a user
         # optimising cost against the standard metric would choose it and ship a pipeline carrying
         # none of their data's conditional structure. The tool therefore defaults it ON and makes
         # suppressing it an explicit, argued choice.
@@ -859,7 +859,7 @@ class Generator:
         """Record whether reasoning actually fired, because the flag is not evidence that it did.
 
         A user who sets the flag and assumes it took effect can ship the suppressed configuration
-        without knowing it -- the 14.8x-cheaper setting that produces output below a
+        without knowing it -- the 14.5x-cheaper setting that produces output below a
         no-information control. So the setting is never trusted; only what comes back is.
 
         `thinking_tokens=None` means the vendor did not report a count on this call, which is NOT
@@ -867,7 +867,7 @@ class Generator:
         expensive way: a vendor SDK omits the token-details object entirely on its streaming
         path, and streaming is exactly what a large output budget forces -- i.e. the reporting
         gap opens precisely in the configuration a reasoning model needs. Recording those calls
-        as "zero reasoning tokens" manufactured an apparent intermittency that was an artifact of
+        as "zero reasoning tokens" manufactured an apparent intermittency that was an artefact of
         the transport, not behaviour of the model.
         """
         if thinking_tokens is not None:

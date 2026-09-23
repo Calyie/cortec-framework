@@ -267,7 +267,7 @@ class PrivacyLedger:
     def audit_report(self) -> dict:
         """A machine-readable trail: every query, its cost, and how the total was reached.
 
-        This is the artifact a compliance team keeps. It is intentionally verbose — it should be
+        This is the artefact a compliance team keeps. It is intentionally verbose — it should be
         possible to recompute the total by hand from this dict alone.
         """
         by_group: dict[str, dict] = {}
