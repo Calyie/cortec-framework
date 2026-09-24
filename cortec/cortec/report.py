@@ -183,8 +183,47 @@ def progress(text: str, *, enabled: bool | None = None) -> str:
     return paint(f"    {text}", "reference", enabled=enabled)
 
 
+_stdout_open = True
+
+
 def emit(text: str) -> None:
-    print(text, flush=True)
+    """Print one line of the record to stdout. Once a downstream reader closes the pipe (`head`,
+    quitting `less`), stop silently rather than raising BrokenPipeError on every remaining line."""
+    global _stdout_open
+    if not _stdout_open:
+        return
+    try:
+        print(text, flush=True)
+    except BrokenPipeError:
+        _stdout_open = False
+
+
+def emit_progress(text: str) -> None:
+    """A transient one-line progress indicator on STDERR, redrawn in place after each model call.
+
+    It exists so a long Stage B (dozens of sequential model calls) does not look frozen. It is
+    shown only when stderr is a terminal, so it never enters a piped stdout record, a log file or
+    an exported record: the `cortec-result/1` contract on stdout is left exactly as before. Pair
+    with `emit_progress_done()` to clear the line before the next stdout block."""
+    try:
+        if not sys.stderr.isatty():
+            return
+        line = paint(text, "reference", enabled=colour_enabled(sys.stderr))
+        sys.stderr.write("\r\x1b[2K  " + line)
+        sys.stderr.flush()
+    except (BrokenPipeError, ValueError, OSError):
+        pass
+
+
+def emit_progress_done() -> None:
+    """Clear the transient progress line so the authoritative stdout summary that follows starts
+    clean. The stdout record already carries the final call, row and spend counts."""
+    try:
+        if sys.stderr.isatty():
+            sys.stderr.write("\r\x1b[2K")
+            sys.stderr.flush()
+    except (BrokenPipeError, ValueError, OSError):
+        pass
 
 
 # ── tables ────────────────────────────────────────────────────────────────────────────
@@ -501,6 +540,8 @@ def record_generation(stats, *, backend: str | None = None, surface: str | None 
                ("rows dropped, undeclared category", stats.rows_undeclared_category),
                ("rate-limit waits", stats.rate_limit_waits),
                ("spend (USD)", stats.spend_usd)]
+    if getattr(stats, "budget_capped", False):
+        values.append(("budget capped", True))
     if n_rows is not None:
         values.append(("rows in the output", n_rows))
     if positive_rate is not None:

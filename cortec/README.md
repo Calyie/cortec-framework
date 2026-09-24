@@ -419,8 +419,9 @@ proof about the corpus.
 | `EmptyContentError` | a reasoning model spent its output budget before writing any CSV | raise the output budget; `ModelRefusalError` is the different case of a refusal, which needs a coarser cell or a different generator |
 | `FatalAPIError` | billing, quota, credentials, or a model the surface does not serve | fix the account or the model name; nothing was retried and the release is unchanged |
 | the run waits and `rate_limit_waits` rises | the vendor asked it to wait | nothing; the waits back off from 15 s to 4 min before an error surfaces |
-| `GenerationError: spend cap reached`, or a yield abort | the cap was reached, or most returned rows were dropped | raise `budget_usd`, or check the schema against the rows being dropped |
-| `select_to_release` refuses the pool | a run that stopped early left cohorts short of the rows they owe | generate the full pool; `allow_short_pool=True` proceeds with a warning |
+| a "budget cap reached" warning and fewer rows than requested | the spend cap was reached | not an error: the output holds the rows completed within the budget; raise `budget_usd` or use a cheaper validated model for the full request |
+| `GenerationError` naming a yield or parse rate | most returned rows were dropped, or too few calls parsed | a genuine fault, so the run stops before spending more; check the schema against the rows being dropped |
+| `select_to_release` refuses the pool | a run that stopped early without a budget cap (a lost connection) left cohorts short of the rows they owe | a budget cap is handled automatically, returning the partial pool with a warning; for other truncations pass `allow_short_pool=True` |
 | `generate_by_cell` refuses the release | a conditioning column has under 90% of its mass in released bands | lower `n_min` or use a coarser level, or generate cohort-wise |
 
 ## 11. Output and exports

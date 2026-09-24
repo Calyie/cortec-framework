@@ -89,6 +89,9 @@ class GenerationStats:
     truncations: int = 0
     timeouts: int = 0
     spend_usd: float = 0.0
+    # Set when a --budget-usd cap stopped generation early. The output then holds the rows that
+    # were completed within the budget, not the full request; the run does not fail.
+    budget_capped: bool = False
     thinking_tokens: int = 0
     calls_without_reasoning: int = 0
     # A call whose reasoning could not be observed at all is tracked apart from one observed to
@@ -1016,10 +1019,10 @@ class Generator:
 
     def _checkpoint(self) -> None:
         s = self.stats
-        if self.budget_usd is not None and s.spend_usd >= self.budget_usd:
-            raise GenerationError(
-                f"spend cap reached: ${s.spend_usd:.2f} of ${self.budget_usd:.2f} after "
-                f"{s.calls} calls ({s.rows} rows).")
+        # The spend cap is NOT a fault: it is a limit the user chose, handled as a graceful stop in
+        # the generation loop (which keeps the rows completed within the budget and sets
+        # stats.budget_capped). The two guards below ARE faults: the run is spending money and
+        # producing nothing usable, so it stops loudly before spending more.
         parse_rate = s.parse_ok / max(s.calls, 1)
         if s.calls >= self.CHECK_EVERY and parse_rate < self.MIN_PARSE_RATE:
             raise GenerationError(
@@ -1098,9 +1101,15 @@ class Generator:
         if sub_bin not in ("release", "generator"):
             raise GenerationError("sub_bin must be 'release' (default) or 'generator'")
         pool = self.generate(release, int(pool_factor * n_rows), verbose=verbose)
-        if pool_factor == 1:
+        # pool_factor 1 generates exactly n_rows with no pool to select from. A budget cap that
+        # left fewer than n_rows rows is the partial result the user paid for (already flagged
+        # budget-capped): return it as-is, since selection needs a pool at least as large as the
+        # target. When the cap left n_rows or more, selection still runs, with allow_short_pool so
+        # a cohort the cap left thin is handled by a warning rather than a refusal.
+        if pool_factor == 1 or (self.stats.budget_capped and len(pool) < n_rows):
             return release_subbin_values(self.schema, release, pool, seed=seed) if sub_bin == "release" else pool
-        return select_to_release(self.schema, release, pool, n_rows, seed=seed, sub_bin=sub_bin)
+        return select_to_release(self.schema, release, pool, n_rows, seed=seed, sub_bin=sub_bin,
+                                 allow_short_pool=self.stats.budget_capped)
 
     def generate(self, release: Release, n_rows: int, *, verbose: bool = True) -> pd.DataFrame:
         """Draw `n_rows` synthetic records from a release. Repeatable at no privacy cost."""
@@ -1109,6 +1118,7 @@ class Generator:
                 f"release is for schema {release.schema_name!r} but this generator was built for "
                 f"{self.schema.name!r}")
         alloc = allocate_rows(release, n_rows)
+        total = int(sum(alloc))
         frames = []
         for cohort, want in zip(release.cohorts, alloc):
             if want <= 0:
@@ -1119,6 +1129,9 @@ class Generator:
             _target = cohort_quota_targets(self.schema, cohort, int(want), self._quota_rng) if self.quota else None
             _done = {"n": 0, "positives": 0, "numerical": {}, "categorical": {}}
             while got < want and attempts < max_attempts:
+                if self.budget_usd is not None and self.stats.spend_usd >= self.budget_usd:
+                    self.stats.budget_capped = True
+                    break
                 attempts += 1
                 ask = min(self.rows_per_call, want - got)
                 prompt, _rec = build_prompt(
@@ -1145,10 +1158,27 @@ class Generator:
                     frames.append(df)
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
+                if verbose:
+                    report.emit_progress(
+                        f"Stage B · {self.backend} · call {self.stats.calls} · "
+                        f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
             if verbose:
                 report.emit(report.progress(f"{cohort['cohort_name'][:38]:40s} {got}/{want} rows"))
+            if self.stats.budget_capped:
+                break
+        if verbose:
+            report.emit_progress_done()
+        if self.stats.budget_capped:
+            self.stats.warnings.append(
+                f"budget cap reached: ${self.stats.spend_usd:.2f} of ${self.budget_usd:.2f} after "
+                f"{self.stats.calls} calls. This output holds the {self.stats.rows} rows completed "
+                f"within the budget, not the {total} requested; raise --budget-usd, or use a cheaper "
+                f"validated model, for the full request.")
         if not frames:
-            raise GenerationError("no usable rows were generated")
+            raise GenerationError(
+                f"the budget of ${self.budget_usd:.2f} was spent (${self.stats.spend_usd:.2f} over "
+                f"{self.stats.calls} calls) before any usable rows were produced; raise --budget-usd"
+                if self.stats.budget_capped else "no usable rows were generated")
         self._assert_reasoning_fired()
         return pd.concat(frames, ignore_index=True)
 
@@ -1257,6 +1287,7 @@ class Generator:
                 f"the release. Pass allow_low_coverage=True only if you have checked that the "
                 f"uncovered population does not matter for your use.")
         alloc = _largest_remainder(support / support.sum(), n_rows)
+        total = int(sum(alloc))
         # Cell-wise generation needs n_rows >> len(cells). At 75 rows over 54 cells every cell gets
         # 1-2 rows, the prompt asks for a single record at a time, and parsing collapses — a 7B
         # model aborted at 0% parse in exactly this regime. Warn rather than let the run fail
@@ -1293,6 +1324,9 @@ class Generator:
             got = 0
             attempts = 0
             while got < want and attempts < self.max_retries * (want // self.rows_per_call + 1):
+                if self.budget_usd is not None and self.stats.spend_usd >= self.budget_usd:
+                    self.stats.budget_capped = True
+                    break
                 attempts += 1
                 ask = min(self.rows_per_call, want - got)
                 npos = positives_for_cell(meta["rate"], ask, rng)
@@ -1330,11 +1364,28 @@ class Generator:
                     frames.append(df)
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
+                if verbose:
+                    report.emit_progress(
+                        f"Stage B · {self.backend} · call {self.stats.calls} · "
+                        f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
             if verbose:
                 report.emit(report.progress(f"{str(key)[:40]:42s} {got}/{want} rows "
                       f"(released rate {meta['rate']:.3f})"))
+            if self.stats.budget_capped:
+                break
+        if verbose:
+            report.emit_progress_done()
+        if self.stats.budget_capped:
+            self.stats.warnings.append(
+                f"budget cap reached: ${self.stats.spend_usd:.2f} of ${self.budget_usd:.2f} after "
+                f"{self.stats.calls} calls. This output holds the {self.stats.rows} rows completed "
+                f"within the budget, not the {total} requested; raise --budget-usd, or use a cheaper "
+                f"validated model, for the full request.")
         if not frames:
-            raise GenerationError("no usable rows were generated")
+            raise GenerationError(
+                f"the budget of ${self.budget_usd:.2f} was spent (${self.stats.spend_usd:.2f} over "
+                f"{self.stats.calls} calls) before any usable rows were produced; raise --budget-usd"
+                if self.stats.budget_capped else "no usable rows were generated")
         self._assert_reasoning_fired()
         return pd.concat(frames, ignore_index=True)
 
