@@ -59,6 +59,14 @@ and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
 python3 -m pytest cortec/tests -q     # 151 tests, offline, each named after the defect it prevents
 ```
 
+For a full tour of the three stages in the standard output, with no API key and no data, run
+the bundled example (it builds a small synthetic table in code and uses the offline `mock`
+backend, so the release and the bound are real and only the generated numbers are placeholders):
+
+```bash
+python3 example.py
+```
+
 ## 2. Choose where the model runs, and set the credentials
 
 The generator is called through one of four backends, and three of them can reach either the
