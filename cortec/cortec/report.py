@@ -29,6 +29,8 @@ import os
 import re
 import sys
 import textwrap
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -232,6 +234,40 @@ def emit_progress_done() -> None:
             sys.stderr.flush()
     except (BrokenPipeError, ValueError, OSError):
         pass
+
+
+@contextmanager
+def ticker(text, *, enabled: bool = True, interval: float = 0.5):
+    """A live progress line while a blocking call runs, so a model call of a minute or more does
+    not look like a frozen screen: `text(elapsed_seconds)` is redrawn on stderr every `interval`
+    seconds until the block ends. Terminal only, like `emit_progress`; nothing is written when
+    stderr is not a terminal or `enabled` is false.
+
+        with ticker(lambda t: f"waiting {t:.0f}s"):
+            reply = client.call(prompt)
+    """
+    try:
+        live = enabled and sys.stderr.isatty()
+    except (ValueError, OSError):
+        live = False
+    if not live:
+        yield
+        return
+    stop = threading.Event()
+    started = time.monotonic()
+
+    def redraw():
+        while not stop.wait(interval):
+            emit_progress(text(time.monotonic() - started))
+
+    emit_progress(text(0.0))
+    thread = threading.Thread(target=redraw, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=interval * 2)
 
 
 # ── refusals ──────────────────────────────────────────────────────────────────────────

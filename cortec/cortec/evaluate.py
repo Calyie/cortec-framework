@@ -117,11 +117,15 @@ def evaluate(schema: Schema, tables: dict[str, pd.DataFrame], *, train: pd.DataF
     scored = [(nm, tables[nm][cols]) for nm in names] + \
              [(f"real sample, n={len(real)} (ceiling)", real[cols]),
               (f"permuted target, n={len(perm)} (floor)", perm[cols])]
+    from .report import emit_progress_done, ticker
     for label, df in scored:
-        u = tstr(schema, df, holdout, seed=0)
+        # three students per table take seconds each; the terminal shows which is being scored
+        with ticker(lambda t, label=label: f"Evaluation · training the students on {label} · {t:.0f}s"):
+            u = tstr(schema, df, holdout, seed=0)
         miss = absent_categories(schema, df)
         absent[label] = miss
         rows.append([label, len(df), marginal_tv(schema, df, holdout), u["LR"], u["RF"], u["GBM"], len(miss)])
+    emit_progress_done()
     table = ResultTable("fidelity and utility",
                         ["table", "rows", "1-way TV", "TSTR-LR", "TSTR-RF", "TSTR-GBM", "absent categories"],
                         rows, reference_rows=[len(names), len(names) + 1],

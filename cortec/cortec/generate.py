@@ -1015,6 +1015,21 @@ class Generator:
             df = df[keep]
         return df if len(df) else None
 
+    # ── progress ────────────────────────────────────────────────────────────────────
+
+    def _progress_text(self, total: int, waiting: float | None = None) -> str:
+        """The one-line Stage B progress shown on a terminal: the call in flight (with the time
+        spent waiting on the model) or the last completed call, rows against the request, the
+        percentage, and the spend so far. `total` is the number of rows requested."""
+        s = self.stats
+        expected = max(1, -(-total // self.rows_per_call))
+        pct = min(100, int(100 * s.rows / total)) if total else 0
+        if waiting is None:
+            call = f"call {s.calls} of ~{expected}"
+        else:
+            call = f"call {s.calls} of ~{expected} · waiting {waiting:.0f}s for the model"
+        return f"Stage B · {self.backend} · {call} · {s.rows}/{total} rows ({pct}%) · ${s.spend_usd:.2f}"
+
     # ── guards ──────────────────────────────────────────────────────────────────────
 
     def _checkpoint(self) -> None:
@@ -1140,7 +1155,8 @@ class Generator:
                 self.stats.rows_requested += ask
                 self.stats.calls += 1
                 try:
-                    df = self.parse(self._call(prompt))
+                    with report.ticker(lambda t: self._progress_text(total, waiting=t), enabled=verbose):
+                        df = self.parse(self._call(prompt))
                 except (EmptyContentError, ContextTruncationError, FatalAPIError):
                     raise                   # configuration or account faults: stop, do not retry
                 except Exception as e:
@@ -1159,9 +1175,7 @@ class Generator:
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
                 if verbose:
-                    report.emit_progress(
-                        f"Stage B · {self.backend} · call {self.stats.calls} · "
-                        f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
+                    report.emit_progress(self._progress_text(total))
             if verbose:
                 report.emit_progress_done()     # wipe the stderr line before the stdout one
                 report.emit(report.progress(f"{cohort['cohort_name'][:38]:40s} {got}/{want} rows"))
@@ -1341,7 +1355,8 @@ class Generator:
                 self.stats.rows_requested += ask
                 self.stats.calls += 1
                 try:
-                    df = self.parse(self._call(prompt))
+                    with report.ticker(lambda t: self._progress_text(total, waiting=t), enabled=verbose):
+                        df = self.parse(self._call(prompt))
                 except (EmptyContentError, ContextTruncationError, FatalAPIError):
                     raise                   # configuration or account faults: stop, do not retry
                 except Exception as e:
@@ -1366,9 +1381,7 @@ class Generator:
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
                 if verbose:
-                    report.emit_progress(
-                        f"Stage B · {self.backend} · call {self.stats.calls} · "
-                        f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
+                    report.emit_progress(self._progress_text(total))
             if verbose:
                 report.emit_progress_done()     # wipe the stderr line before the stdout one
                 report.emit(report.progress(f"{str(key)[:40]:42s} {got}/{want} rows "
