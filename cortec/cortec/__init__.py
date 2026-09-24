@@ -17,7 +17,7 @@ from .prompts import PromptIntegrityError
 from .report import RunRecord, ResultTable, record, show, guard, install_guard, register_refusal
 from .evaluate import evaluate
 
-# the package's deliberate refusals, printed in the standard layout by `guard()` (README §11)
+# the package's deliberate refusals, printed in the standard layout by `guard()` (README §10)
 register_refusal(PrivacyAccountingError, SchemaError, DataValidationError, ReleaseError,
                  GenerationError, RateLimitedError, ModelCapabilityError, BoundError,
                  PromptIntegrityError)

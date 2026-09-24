@@ -109,7 +109,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     positions = [out.find(p) for p in parts]
     assert all(p >= 0 for p in positions) and positions == sorted(positions)
     assert "\x1b[" not in out
-    # a deliberate refusal prints in the same layout and exits, instead of a traceback ...
+    # a deliberate refusal prints in the same layout and exits, instead of a traceback
     from cortec import DataValidationError
     from cortec.report import guard
     with pytest.raises(SystemExit) as e, guard():
@@ -120,7 +120,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
              "reason", "NO privacy budget was spent", "not a fault in the tool"]
     positions = [out.find(p) for p in parts]
     assert all(p >= 0 for p in positions) and positions == sorted(positions)
-    # ... while anything that is not a registered refusal keeps its traceback
+    # anything that is not a registered refusal keeps its traceback
     with pytest.raises(KeyError), guard():
         raise KeyError("a fault, not a refusal")
     # the help page (`python -m cortec`) lists every public callable with its real signature

@@ -89,7 +89,7 @@ class GenerationStats:
     truncations: int = 0
     timeouts: int = 0
     spend_usd: float = 0.0
-    # Set when a --budget-usd cap stopped generation early. The output then holds the rows that
+    # Set when the budget_usd cap stopped generation early. The output then holds the rows that
     # were completed within the budget, not the full request; the run does not fail.
     budget_capped: bool = False
     thinking_tokens: int = 0
@@ -1019,10 +1019,10 @@ class Generator:
 
     def _checkpoint(self) -> None:
         s = self.stats
-        # The spend cap is NOT a fault: it is a limit the user chose, handled as a graceful stop in
-        # the generation loop (which keeps the rows completed within the budget and sets
-        # stats.budget_capped). The two guards below ARE faults: the run is spending money and
-        # producing nothing usable, so it stops loudly before spending more.
+        # The spend cap is a limit the user chose, not a fault: the generation loop stops at it,
+        # keeps the rows completed within the budget and sets stats.budget_capped. The two guards
+        # below are faults: the run is spending money and producing nothing usable, so it stops
+        # before spending more.
         parse_rate = s.parse_ok / max(s.calls, 1)
         if s.calls >= self.CHECK_EVERY and parse_rate < self.MIN_PARSE_RATE:
             raise GenerationError(
@@ -1173,12 +1173,12 @@ class Generator:
             self.stats.warnings.append(
                 f"budget cap reached: ${self.stats.spend_usd:.2f} of ${self.budget_usd:.2f} after "
                 f"{self.stats.calls} calls. This output holds the {self.stats.rows} rows completed "
-                f"within the budget, not the {total} requested; raise --budget-usd, or use a cheaper "
+                f"within the budget, not the {total} requested; raise budget_usd, or use a cheaper "
                 f"validated model, for the full request.")
         if not frames:
             raise GenerationError(
                 f"the budget of ${self.budget_usd:.2f} was spent (${self.stats.spend_usd:.2f} over "
-                f"{self.stats.calls} calls) before any usable rows were produced; raise --budget-usd"
+                f"{self.stats.calls} calls) before any usable rows were produced; raise budget_usd"
                 if self.stats.budget_capped else "no usable rows were generated")
         self._assert_reasoning_fired()
         return pd.concat(frames, ignore_index=True)
@@ -1381,12 +1381,12 @@ class Generator:
             self.stats.warnings.append(
                 f"budget cap reached: ${self.stats.spend_usd:.2f} of ${self.budget_usd:.2f} after "
                 f"{self.stats.calls} calls. This output holds the {self.stats.rows} rows completed "
-                f"within the budget, not the {total} requested; raise --budget-usd, or use a cheaper "
+                f"within the budget, not the {total} requested; raise budget_usd, or use a cheaper "
                 f"validated model, for the full request.")
         if not frames:
             raise GenerationError(
                 f"the budget of ${self.budget_usd:.2f} was spent (${self.stats.spend_usd:.2f} over "
-                f"{self.stats.calls} calls) before any usable rows were produced; raise --budget-usd"
+                f"{self.stats.calls} calls) before any usable rows were produced; raise budget_usd"
                 if self.stats.budget_capped else "no usable rows were generated")
         self._assert_reasoning_fired()
         return pd.concat(frames, ignore_index=True)

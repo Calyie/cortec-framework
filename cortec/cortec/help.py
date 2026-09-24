@@ -117,7 +117,8 @@ def _labelled_row(label: str, body: str, width: int, *, indent: int = 4,
     wrapped = textwrap.wrap(body, WIDTH - 2, initial_indent=pad, subsequent_indent=pad,
                             break_long_words=False, break_on_hyphens=False) or [pad]
     first = " " * indent + paint(f"{label:<{width}}", "key") + "  " + wrapped[0].lstrip()
-    return [first] + [paint(line, role) for line in wrapped[1:]] if role else [first] + wrapped[1:]
+    rest = [paint(line, role) for line in wrapped[1:]]
+    return [first] + rest
 
 
 def _names_row(label: str, names: list[str], width: int) -> list[str]:
