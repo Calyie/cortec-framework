@@ -1,5 +1,6 @@
-"""`python -m cortec`: the help page. What you can run, in what order, with every argument and
-default read from the code. `python -m cortec <name>` prints one name's full documentation."""
+"""The `cortec` command (also `python -m cortec`): the help page. `cortec --help` prints what you
+can run, in what order, with every argument and default read from the code; `cortec <name>`
+prints one name's full documentation. The command runs nothing else: the package is a library."""
 import sys
 
 import cortec
@@ -18,8 +19,8 @@ RUN_ORDER = [                      # the value column fits the page width after 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    return _help.main(cortec, argv, tool="cortec", module="cortec", run_order=RUN_ORDER,
-                      readme="README.md", example="example.py")
+    return _help.main(cortec, argv, tool="cortec", module="cortec", command="cortec",
+                      run_order=RUN_ORDER, readme="README.md", example="example.py")
 
 
 if __name__ == "__main__":

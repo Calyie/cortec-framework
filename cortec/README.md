@@ -69,12 +69,14 @@ python3 example.py
 
 For the list of everything the package can run, in order, with each function's arguments and
 defaults read from the code, print the help page; give it a name for one function's full
-documentation:
+documentation. The `cortec` command does nothing else: the package is a library, and the runs
+are Python calls.
 
 ```bash
-python3 -m cortec                        # run order, functions, classes, refusals
-python3 -m cortec bound_with_controls    # one name in full
-python3 -m cortec_hybrid                 # the same page for cortec-hybrid
+cortec --help                        # run order, functions, classes, refusals
+cortec bound_with_controls           # one name in full
+cortec-hybrid --help                 # the same page for cortec-hybrid
+python3 -m cortec --help             # the same, when pip's scripts directory is not on PATH
 ```
 
 ## 2. Choose where the model runs, and set the credentials

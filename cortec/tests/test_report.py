@@ -126,7 +126,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     # the help page (`python -m cortec`) lists every public callable with its real signature
     import cortec
     from cortec.__main__ import main as help_main
-    assert help_main([]) == 0
+    assert help_main(["--help"]) == 0 and help_main(["-h"]) == 0 and help_main([]) == 0
     page = capsys.readouterr().out
     assert "── cortec" in page and "Help · What you can run" in page and "run order" in page
     for name in cortec.__all__:

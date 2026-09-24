@@ -15,6 +15,11 @@ dependencies = ["numpy>=1.24", "pandas>=2.0", "scikit-learn>=1.3", "cortec>=0.1.
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 
+# The one console script prints the help page (`cortec-hybrid --help`, `cortec-hybrid <name>`)
+# and runs nothing else; the parity audit checks that it resolves.
+[project.scripts]
+cortec-hybrid = "cortec_hybrid.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cortec_hybrid*"]

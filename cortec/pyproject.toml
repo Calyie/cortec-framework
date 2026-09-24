@@ -29,9 +29,12 @@ vertex = ["google-genai>=1.0"]
 ollama = ["httpx>=0.27"]
 dev = ["pytest>=7", "scikit-learn>=1.3"]
 
-# No console script. An earlier version declared `cortec = "cortec.cli:main"` with no cli module
-# behind it, so every install placed a `cortec` executable on PATH that failed on import. The
-# package is a library; the parity audit now checks that any declared entry point resolves.
+# The one console script prints the help page (`cortec --help`, `cortec <name>`) and runs nothing
+# else: the package is a library and the runs are Python calls. An earlier version declared
+# `cortec = "cortec.cli:main"` with no cli module behind it, so every install placed an executable
+# on PATH that failed on import; the parity audit now checks that a declared entry point resolves.
+[project.scripts]
+cortec = "cortec.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

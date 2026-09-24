@@ -105,9 +105,9 @@ def _grouped(package):
     return functions, classes, errors
 
 
-def overview(package, *, tool: str, module: str, run_order, readme: str,
+def overview(package, *, tool: str, module: str, command: str, run_order, readme: str,
              example: str | None = None) -> str:
-    """The page `python -m <module>` prints."""
+    """The page `<command> --help` (and `python -m <module>`) prints."""
     lines = [header("Help", "What you can run", tool=tool), ""]
     lines.append(paint("  run order", "key"))
     lines.append(kv_block(run_order, indent=4))
@@ -132,7 +132,8 @@ def overview(package, *, tool: str, module: str, run_order, readme: str,
             first = _first_line(cls)
             tag = "" if _is_refusal(cls) else "  (a fault, not a refusal: keeps its traceback)"
             lines += _wrapped(name + ("  " + first if first else "") + tag, 4, role="reference")
-    more = [(f"python -m {module} <name>", "the full documentation of one name above")]
+    more = [(f"{command} <name>", "the full documentation of one name above"),
+            (f"{command} --help", f"this page (or: python -m {module})")]
     if example:
         more.append((f"python {example}", "a runnable tour; no key and no data needed"))
     more.append((readme, "the manual: each step, its arguments, what to read"))
@@ -140,8 +141,8 @@ def overview(package, *, tool: str, module: str, run_order, readme: str,
     return "\n".join(lines)
 
 
-def detail(package, name: str, *, tool: str, module: str) -> str | None:
-    """The page `python -m <module> <name>` prints, or None when the name is not public."""
+def detail(package, name: str, *, tool: str, command: str) -> str | None:
+    """The page `<command> <name>` prints, or None when the name is not public."""
     obj = getattr(package, name, None) if name in getattr(package, "__all__", ()) else None
     if obj is None or not callable(obj):
         return None
@@ -161,18 +162,20 @@ def detail(package, name: str, *, tool: str, module: str) -> str | None:
             if first:
                 lines += _wrapped(first, 4, role="reference", hang=0)
             lines.append("")
-    lines.append(kv_block([(f"python -m {module}", "the overview of every public name")]))
+    lines.append(kv_block([(f"{command} --help", "the overview of every public name")]))
     return "\n".join(lines)
 
 
-def main(package, argv, *, tool: str, module: str, run_order, readme: str,
+def main(package, argv, *, tool: str, module: str, command: str, run_order, readme: str,
          example: str | None = None) -> int:
-    """The `__main__` of both packages: the overview, or one name's page; 2 for an unknown name."""
+    """Behind the `cortec` and `cortec-hybrid` commands and `python -m <module>`: `--help`, `-h`
+    or no argument prints the overview; a public name prints its page; an unknown name lists
+    the public names and returns 2."""
     if not argv or argv[0] in ("-h", "--help", "help"):
-        emit(overview(package, tool=tool, module=module, run_order=run_order, readme=readme,
-                      example=example))
+        emit(overview(package, tool=tool, module=module, command=command, run_order=run_order,
+                      readme=readme, example=example))
         return 0
-    page = detail(package, argv[0], tool=tool, module=module)
+    page = detail(package, argv[0], tool=tool, command=command)
     if page is None:
         names = ", ".join(n for n in package.__all__ if not n.startswith("__"))
         emit(header("Help", "Unknown name", tool=tool))
@@ -180,7 +183,7 @@ def main(package, argv, *, tool: str, module: str, run_order, readme: str,
         emit("")
         for line in _wrapped("public names: " + names, 2, role="reference", hang=2):
             emit(line)
-        emit(kv_block([(f"python -m {module}", "the overview")]))
+        emit(kv_block([(f"{command} --help", "the overview")]))
         return 2
     emit(page)
     return 0

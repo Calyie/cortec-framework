@@ -40,7 +40,8 @@ pip install ./cortec
 pip install ./cortec-hybrid
 pip install './cortec[dev]'                   # pytest, for the tests
 python3 -m pytest cortec-hybrid/tests -q     # 28 tests, offline
-python3 -m cortec_hybrid                     # the help page: what you can run, with the arguments
+cortec-hybrid --help                         # the help page: what you can run, with the arguments
+                                             #   (or python3 -m cortec_hybrid --help)
 ```
 
 ## 2. What you need
@@ -84,8 +85,8 @@ print(gain["verdict"])
 When the correction is refused (no cell reaches `n_min`, a column the schema does not declare,
 a vacuous privacy unit), it raises `CorrectionError` before any budget is spent. `cortec`'s
 `install_guard()` or `with guard():` prints the refusal in the standard layout and exits with
-status 2 instead of showing a traceback (section 10 of `cortec`'s README); `python3 -m
-cortec_hybrid` prints this package's help page.
+status 2 instead of showing a traceback (section 10 of `cortec`'s README); `cortec-hybrid
+--help` prints this package's help page.
 
 `correct()` is four steps, each available on its own:
 
