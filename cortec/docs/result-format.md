@@ -60,7 +60,7 @@ the paper's convention, and integers with a thousands separator.
 | Evaluation | `fidelity and utility` | table, rows, 1-way TV, TSTR-LR, TSTR-RF, TSTR-GBM, absent categories; the last two rows are the real sample and the permuted floor |
 | Correction | `released conditional table` | cell, rate, support |
 
-The evaluation table is the paper's Table 6 layout. A synthetic row is read against the two
+The evaluation table is the paper's head-to-head table layout. A synthetic row is read against the two
 reference rows, never against a threshold: the real sample is the ceiling at that size, and the
 permuted floor is what data with no usable target information scores.
 

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Layout-agnostic on purpose. This package's root is parents[1]; the `cortec` package it depends
-# on is a SIBLING of that root -- tools/cortec in the research monorepo, cortec-tools/cortec in the
+# on is a SIBLING of that root -- tools/cortec in the research monorepo, cortec-framework/cortec in the
 # published tools repository. An earlier version hard-coded parents[3]/"tools"/"cortec", which is
 # the monorepo shape only, and the whole suite failed at collection the moment the packages were
 # published on their own.

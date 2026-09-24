@@ -40,6 +40,7 @@ pip install './cortec[anthropic]'      # Claude, recommended on AWS Bedrock
 pip install './cortec[openai]'         # GPT, recommended on Azure OpenAI
 pip install './cortec[gemini]'         # Gemini, recommended on Google Vertex AI
 pip install ./cortec-hybrid
+pip install './cortec[dev]'            # pytest and scikit-learn, for the tests and the evaluator
 python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 151 + 28, offline
 ```
 

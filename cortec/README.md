@@ -371,7 +371,7 @@ categories absent from each table. It needs scikit-learn, the `dev` extra.
 from cortec import evaluate
 
 rec = evaluate(schema, {"cortec": synthetic}, train=private_df, holdout=holdout_df)
-rec.show()                      # the paper's Table 6 layout, reference rows marked
+rec.show()                      # the paper's head-to-head table layout, reference rows marked
 rec.save("results", "evaluation")
 ```
 
@@ -379,7 +379,7 @@ rec.save("results", "evaluation")
 statistically indistinguishable from models trained on a real sample of the same size, with
 differences of +0.007, −0.003 and +0.012 AUC across three students and every p > 0.18. On a
 finance dataset the pooled release fell short (TSTR-LR 0.652 against a real sample's 0.695, about
-94% of real-sample utility), and the configuration this package ships by default brought all three
+94% of real-sample utility), and the configuration this package ships by default left all three
 students within 0.015 AUC of the floor on both datasets. That is a result at n = 300 under one
 generator family. At larger sizes the point estimates favour the real sample, because a fixed
 release does not get richer as you ask for more records. Do not assume parity: measure it on your
@@ -419,7 +419,7 @@ proof about the corpus.
 | `EmptyContentError` | a reasoning model spent its output budget before writing any CSV | raise the output budget; `ModelRefusalError` is the different case of a refusal, which needs a coarser cell or a different generator |
 | `FatalAPIError` | billing, quota, credentials, or a model the surface does not serve | fix the account or the model name; nothing was retried and the release is unchanged |
 | the run waits and `rate_limit_waits` rises | the vendor asked it to wait | nothing; the waits back off from 15 s to 4 min before an error surfaces |
-| `GenerationError: spend cap reached`, or a yield abort | the cap was hit, or most returned rows were dropped | raise `budget_usd`, or check the schema against the rows being dropped |
+| `GenerationError: spend cap reached`, or a yield abort | the cap was reached, or most returned rows were dropped | raise `budget_usd`, or check the schema against the rows being dropped |
 | `select_to_release` refuses the pool | a run that stopped early left cohorts short of the rows they owe | generate the full pool; `allow_short_pool=True` proceeds with a warning |
 | `generate_by_cell` refuses the release | a conditioning column has under 90% of its mass in released bands | lower `n_min` or use a coarser level, or generate cohort-wise |
 

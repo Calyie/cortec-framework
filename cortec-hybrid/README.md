@@ -8,8 +8,8 @@ matters most. `cortec-hybrid` contains no synthesiser. It never calls AIM, MST o
 will not produce a synthetic dataset for you, and it has no dependency on smartnoise-synth. It is a
 post-processor: it releases a DP conditional target table from your private data and rewrites only
 the target column of synthetic data you already generated, so that each cell's rate matches the
-table. Every feature column comes out byte-identical to what you put in; the tool verifies this and
-the test suite asserts it.
+table. Every feature column comes out identical to what you put in; the tool reports the feature
+marginal shift, which is zero, and the test suite asserts that the columns are equal.
 
 ```
 your private data ──► DP conditional table ──┐
@@ -38,6 +38,7 @@ git clone https://github.com/Calyie/cortec-framework
 cd cortec-framework
 pip install ./cortec
 pip install ./cortec-hybrid
+pip install './cortec[dev]'                   # pytest, for the tests
 python3 -m pytest cortec-hybrid/tests -q     # 28 tests, offline
 ```
 
@@ -59,7 +60,7 @@ The one-call form:
 from cortec import Schema
 from cortec_hybrid import check_feasible, correct
 
-check_feasible(schema, n_rows=len(private_df))   # refuses BEFORE you burn hours on a schema AIM cannot fit
+check_feasible(schema, n_rows=len(private_df))   # refuses BEFORE you spend hours on a schema AIM cannot fit
 
 # `synthetic_df` is YOUR synthesiser's output; this tool does not produce it.
 corrected, table, gain = correct(
@@ -148,7 +149,7 @@ rather than the third hour. Pass `n_rows=len(private_df)`, because the row count
 three factors it uses, and `raise_on_fail=False` to receive the report and proceed anyway.
 
 It used to gate on domain size, and our own ablation refuted that. UCI Adult has the largest domain
-of every schema we measured, 4.4 × 10¹³, six million times larger than a healthcare prefix that
+of every schema we measured, 4.4 × 10¹³, 6.5 million times larger than a healthcare prefix that
 times out, and Adult is the one that fits. Within a single dataset, the arm with the larger domain
 fit 425 seconds faster than the arm with the smaller one. Domain volume does not predict
 convergence, and gating on it refuses the wrong schemas. Three factors did predict it, each
@@ -210,7 +211,7 @@ the default of `relabel()`.
 Rank preservation only helps when the input synthetic data already carries within-cell structure.
 When its target is close to noise, precisely the case this tool targets, a ranking model fitted on
 that target learns the noise, and ordering by it injects spurious structure that a downstream model
-mistakes for signal. In our fixture that cost 0.09 AUC against plain i.i.d. assignment.
+mistakes for signal. On the renal registry that cost 0.068 AUC against plain i.i.d. assignment (0.546 against 0.614 in the table below).
 
 The guard we first wrote for this did not work, and why is worth knowing. `_rank_scores` gated on
 whether the synthetic target is predictable from the synthetic features (cross-validated AUC

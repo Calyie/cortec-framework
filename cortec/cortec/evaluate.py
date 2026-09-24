@@ -6,7 +6,7 @@ and the same sample with its target column permuted, the floor of data that carr
 information. Fidelity and utility are reported together in one table, because a method can score
 well on one and poorly on the other.
 
-Measures, as in the paper's Table 6:
+Measures, as in the paper's head-to-head tables:
 
     1-way TV   mean over columns of the total-variation distance between the table's binned
                marginals and the holdout's, on the schema's public bins (lower is better)
