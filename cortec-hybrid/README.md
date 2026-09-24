@@ -44,6 +44,17 @@ cortec-hybrid --help                         # the help page: what you can run, 
                                              #   (or python3 -m cortec_hybrid --help)
 ```
 
+**Run it.** `run_cortec_hybrid.py`, in this directory, runs the correction from the command line:
+the private table, the synthetic table to correct, the schema file (`SCHEMA = Schema(...)`, as in
+step 4 of `cortec`'s README) and the cell columns. With `--holdout` it also scores the table before
+and after beside a real sample and a permuted floor, which is the number `worth_it` does not give.
+
+```bash
+python3 run_cortec_hybrid.py --data private.csv --synthetic synthetic.csv \
+    --schema my_schema.py --columns admission_type,a1c_result --epsilon 0.5 --holdout holdout.csv
+python3 run_cortec_hybrid.py --help
+```
+
 ## 2. What you need
 
 1. **Your private data**, one pandas DataFrame with the columns the schema declares. One row per

@@ -21,7 +21,7 @@ the settings that matter, and what to check before moving on.
 
 | Step | What you do |
 |---|---|
-| 1. Install | Install the package with the extra for your model vendor |
+| 1. Install and run | Install the package, then run the whole pipeline on your table with one command |
 | 2. Choose where the model runs | Pick the surface and set its credentials |
 | 3. Prepare the data | One table, one row per person, string categoricals |
 | 4. Declare the schema | Public facts only: columns, bounds, bins, target |
@@ -38,7 +38,7 @@ regulated deployment (the architecture, the checklist, the controls mapped to st
 failure modes, the two patterns and the cost model), and
 [`docs/design-notes.md`](docs/design-notes.md) records the measurements behind the defaults.
 
-## 1. Install
+## 1. Install and run
 
 Python 3.10 or later. The package depends on numpy and pandas; each vendor SDK is an optional
 extra. The package is not on PyPI, so install from a clone of this repository:
@@ -58,6 +58,46 @@ and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
 ```bash
 python3 -m pytest cortec/tests -q     # 151 tests, offline, each named after the defect it prevents
 ```
+
+**Run it.** `run_cortec.py`, in this directory, runs the whole pipeline on your own table: Stage A
+(the release), Stage B (generation), Stage C (the bound) and the evaluation, printing each in the
+standard layout and writing every file under one folder that it names at the end. It needs two
+inputs: the private table as a CSV with one row per person (step 3), and a Python file that
+declares the schema from public facts only (step 4), for example:
+
+```python
+# my_schema.py
+from cortec import Schema
+
+SCHEMA = Schema(
+    name="encounters",
+    numerical={"age": (18, 95), "length_of_stay": (1, 30)},
+    categorical={"admission_type": ["Emergency", "Elective", "Urgent"],
+                 "a1c_result": ["None", "Norm", ">7", ">8"]},
+    target="readmitted_30d", positive="YES", negative="NO",
+    bins={"age": [18, 40, 55, 70, 95], "length_of_stay": [1, 3, 6, 10, 30]},
+)
+```
+
+```bash
+# offline first: no key, no spend, the whole pipeline on the mock backend
+python3 run_cortec.py --data private.csv --schema my_schema.py --backend mock
+
+# then a real model, with a spend cap; the run keeps the rows completed within it
+export ANTHROPIC_API_KEY=...
+python3 run_cortec.py --data private.csv --schema my_schema.py \
+    --backend anthropic --model claude-fable-5 --n-rows 300 --budget-usd 5
+
+# every setting, with its default
+python3 run_cortec.py --help
+```
+
+Without `--holdout`, one fifth of the data is set aside before Stage A for the Stage C ceiling
+and the evaluation. The output folder (default `results/<schema name>_<backend>`) holds
+`synthetic.csv`, `release.json` (reused by later runs into the same folder, because a release is
+made once), `bound.json`, and each stage's record as JSON, Markdown, CSV and a figure. The
+sections below explain each stage and every setting; the same calls are available from Python
+for your own scripts, and `cortec-hybrid` ships `run_cortec_hybrid.py` for the correction.
 
 For a full tour of the three stages in the standard output, with no API key and no data, run
 the bundled example (it builds a small synthetic table in code and uses the offline `mock`
