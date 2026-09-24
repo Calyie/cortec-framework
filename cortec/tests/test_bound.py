@@ -97,7 +97,7 @@ def test_report_is_headed_utility_transmission_bound_and_uses_real_booleans(worl
     assert d["_verdict"] in ("within bound", "outside tolerance", None)
     assert d["synthetic"]["within_bound"] in (True, False) and not isinstance(d["synthetic"]["within_bound"], str)
     assert "_standards_not_claimed" in d and "HIPAA Expert Determination" in d["_standards_not_claimed"]
-    assert "UTILITY TRANSMISSION BOUND" in rep.summary() and "not a privacy audit" in rep.summary()
+    assert "Utility transmission bound" in rep.summary() and "not a privacy audit" in rep.summary()
 
 
 def test_two_runs_draw_different_noise_so_a_seed_cannot_void_the_spend(world):

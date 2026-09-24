@@ -211,35 +211,12 @@ class BoundReport:
         return path
 
     def summary(self) -> str:
-        c = self.dp_claim
-        lines = ["=" * 88,
-                 f"STAGE C: UTILITY TRANSMISSION BOUND | level {self.synthetic.level} "
-                 f"({', '.join(self.synthetic.columns) or 'global'}) | eps_cert={c['epsilon_transmission_bound']} "
-                 f"| alpha={self.synthetic.alpha} | tolerance={self.tolerance}",
-                 "=" * 88,
-                 f"{'condition':26s} {'cells':>6s} {'cov':>5s} {'uncov':>6s} {'thin':>5s} "
-                 f"{'mean':>7s} {'worst':>7s} {'within':>7s}"]
-        for lab, r in (("synthetic", self.synthetic), ("real-sample [CEILING]", self.ceiling),
-                       ("permuted-target [FLOOR]", self.floor)):
-            lines.append(f"{lab:26s} {r.n_cells:6d} {r.n_cells_covered:5d} {r.n_cells_uncovered:6d} "
-                         f"{r.n_cells_thin:5d} {r.mean_bound:7.4f} {r.worst_case_bound:7.4f} "
-                         f"{'YES' if r.within_bound else 'no':>7s}")
-        if not self.discriminating:
-            lines.append("\n  THIS TEST DID NOT DISCRIMINATE: a bound is meaningful only when the real-sample "
-                         "ceiling clears the tolerance AND the permuted-target floor does not. Adjust the "
-                         "tolerance or epsilon_cert; do not report the synthetic result from this run.")
-        else:
-            lines.append(f"\n  Test discriminates. VERDICT: synthetic data is {self.verdict} at tolerance "
-                         f"{self.tolerance} with simultaneous confidence {1 - self.synthetic.alpha:.0%} "
-                         f"over {self.synthetic.n_cells} released cells.")
-        lines.append(f"\n  epsilon: release {c['epsilon_release']} + bound {c['epsilon_transmission_bound']} "
-                     f"= {c['epsilon_total_per_row']} per row; per person {c['epsilon_per_person']} "
-                     f"(max rows per person {c['max_rows_per_person']})")
-        if c.get("epsilon_per_person_vacuous"):
-            lines.append("  WARNING: the per-person epsilon is vacuous; no per-person privacy claim may be "
-                         "made from this report.")
-        lines.append("  This bounds UTILITY. It is not a privacy audit.")
-        return "\n".join(lines)
+        """The report in cortec's standard layout as plain text (no colour): the same layout
+        `cortec.report.show(report)` prints and `record(report)` exports. Kept so a caller of
+        `print(report.summary())` gets the standard display."""
+        from .report import record_bound, strip_colour
+        schema = (self.meta or {}).get("schema", "") if getattr(self, "meta", None) else ""
+        return strip_colour(record_bound(self, schema=schema).render(enabled=False))
 
 
 # ── the mechanism ─────────────────────────────────────────────────────────────────────
