@@ -241,6 +241,19 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
         raise ValueError(
             f"n_min={n_min} is below the safe floor of 50: a rate over fewer records is dominated "
             f"by its own Laplace noise.")
+    # the cell columns must be schema features; a typo used to surface as a pandas KeyError
+    known = list(schema.numerical) + list(schema.categorical)
+    if not columns:
+        raise ValueError("columns is empty: name at least one schema column to build the cells over")
+    for c in columns:
+        if c == schema.target:
+            raise ValueError(
+                f"column '{c}' is the target: the cells are built over features, and the target "
+                f"is what the table conditions on. NO privacy budget was spent.")
+        if c not in known:
+            raise ValueError(
+                f"column '{c}' is not in the schema; the cells can be built over: "
+                f"{', '.join(known)}. NO privacy budget was spent.")
     schema.validate(df, strict=True)     # before any budget is spent
     data = schema.coerce(df)
     rng = np.random.default_rng(seed)

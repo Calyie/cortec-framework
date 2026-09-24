@@ -1163,6 +1163,7 @@ class Generator:
                         f"Stage B · {self.backend} · call {self.stats.calls} · "
                         f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
             if verbose:
+                report.emit_progress_done()     # wipe the stderr line before the stdout one
                 report.emit(report.progress(f"{cohort['cohort_name'][:38]:40s} {got}/{want} rows"))
             if self.stats.budget_capped:
                 break
@@ -1369,6 +1370,7 @@ class Generator:
                         f"Stage B · {self.backend} · call {self.stats.calls} · "
                         f"{self.stats.rows}/{total} rows · ${self.stats.spend_usd:.2f}")
             if verbose:
+                report.emit_progress_done()     # wipe the stderr line before the stdout one
                 report.emit(report.progress(f"{str(key)[:40]:42s} {got}/{want} rows "
                       f"(released rate {meta['rate']:.3f})"))
             if self.stats.budget_capped:

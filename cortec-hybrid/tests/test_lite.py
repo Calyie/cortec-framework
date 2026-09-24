@@ -135,6 +135,11 @@ def test_bad_data_rejected_before_budget_is_spent():
     df = frame().drop(columns=["edu"])
     with pytest.raises(DataValidationError, match="NO privacy budget was spent"):
         release_conditional_table(s, df, ("edu",), epsilon=0.5)
+    # a cell column the schema does not declare is refused by name, not by a pandas KeyError
+    with pytest.raises(ValueError, match="'edu_level' is not in the schema"):
+        release_conditional_table(s, frame(), ("edu_level",), epsilon=0.5)
+    with pytest.raises(ValueError, match="is the target"):
+        release_conditional_table(s, frame(), (s.target,), epsilon=0.5)
 
 
 def test_n_min_floor_is_enforced():
