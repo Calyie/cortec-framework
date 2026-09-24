@@ -31,6 +31,7 @@ the settings that matter, and what to check before moving on.
 | 8. Evaluate | Compare against a real sample and a permuted floor |
 | 9. Trust boundary | What the model sees, and what the guarantee does not cover |
 | 10. Troubleshooting | What each refusal means and what to change |
+| 11. Output and exports | One printed layout and one exportable record for every stage |
 
 Two further documents: [`docs/deployment.md`](docs/deployment.md) is the operational manual for a
 regulated deployment (the architecture, the checklist, the controls mapped to standards, the
@@ -55,7 +56,7 @@ The enterprise surfaces have their own extras: `bedrock` (adds request signing f
 and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
 
 ```bash
-python3 -m pytest cortec/tests -q     # 136 tests, offline, each named after the defect it prevents
+python3 -m pytest cortec/tests -q     # 151 tests, offline, each named after the defect it prevents
 ```
 
 ## 2. Choose where the model runs, and set the credentials
@@ -360,6 +361,20 @@ compare each declared categorical's full support with the release: a category pr
 release and absent from the output is a representativeness failure that no aggregate metric
 reports.
 
+The package ships this comparison. `evaluate()` scores every table you give it beside a real
+sample of the same size drawn from `train` and that sample with its target permuted, on the
+paper's measures (1-way total variation on the public bins, and TSTR AUC under logistic
+regression, a random forest and gradient boosting on the holdout), and counts the declared
+categories absent from each table. It needs scikit-learn, the `dev` extra.
+
+```python
+from cortec import evaluate
+
+rec = evaluate(schema, {"cortec": synthetic}, train=private_df, holdout=holdout_df)
+rec.show()                      # the paper's Table 6 layout, reference rows marked
+rec.save("results", "evaluation")
+```
+
 **What to expect.** On UCI Adult at n = 300, models trained on this package's output were
 statistically indistinguishable from models trained on a real sample of the same size, with
 differences of +0.007, −0.003 and +0.012 AUC across three students and every p > 0.18. On a
@@ -407,6 +422,33 @@ proof about the corpus.
 | `GenerationError: spend cap reached`, or a yield abort | the cap was hit, or most returned rows were dropped | raise `budget_usd`, or check the schema against the rows being dropped |
 | `select_to_release` refuses the pool | a run that stopped early left cohorts short of the rows they owe | generate the full pool; `allow_short_pool=True` proceeds with a warning |
 | `generate_by_cell` refuses the release | a conditioning column has under 90% of its mass in released bands | lower `n_min` or use a coarser level, or generate cohort-wise |
+
+## 11. Output and exports
+
+Every stage prints one layout and exports one record, through `cortec.report`. The layout is a
+stage header, a block of named values, one or more tables, the warnings, and a verdict. On a
+terminal the numbers the run produced are printed in blue, reference rows (a real sample, a
+permuted floor) in grey, warnings in amber, and a verdict against the output or a refusal in
+orange. Colour is used only on a terminal; `NO_COLOR` or `CORTEC_COLOR=0` turns it off and
+`CORTEC_COLOR=1` forces it. The exported files never carry colour.
+
+```python
+from cortec import show, record
+
+rec = show(release, n_private_rows=len(private_df))   # Stage A
+rec = show(gen, n_rows=len(synthetic))                 # Stage B, after generate()
+rec = show(report, schema=schema.name)                 # Stage C
+files = rec.save("results/run-01", "stage_c")          # {name: path}
+```
+
+`show()` prints and returns a `RunRecord`; `record()` builds one without printing. `save()`
+writes `<stem>.json` (the record, format `cortec-result/1`), `<stem>.md` (the same content as
+Markdown), `<stem>.csv` (the named values), one CSV per table, and `<stem>.png` when matplotlib
+is installed. `RunRecord.from_json()` reads a record back. Tables follow the paper's conventions:
+a label column on the left, numbers to three decimal places, reference rows marked. Figures use
+the paper's own rc parameters and validated palette, available to your own scripts as
+`cortec.plots.paper_rcparams()`. [`docs/result-format.md`](docs/result-format.md) is the contract
+for the record and lists the tables each stage writes.
 
 ## Licence
 

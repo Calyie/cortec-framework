@@ -7,7 +7,7 @@ improvement over its inputs — measure with estimate_gain() and keep the budget
 from .core import (ConditionalTable, DomainTooLargeError, check_feasible, correct,
                    estimate_domain_size, estimate_gain, relabel, release_conditional_table)
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = ["ConditionalTable", "DomainTooLargeError", "check_feasible", "correct",
            "estimate_domain_size", "estimate_gain", "relabel", "release_conditional_table",
            "__version__"]

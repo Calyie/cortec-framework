@@ -13,8 +13,10 @@ from .models import check_model, ModelCapabilityError, validated_models
 from .autoconfig import derive, DerivedConfig
 from .select import select_to_release, inclusion_weights, pool_coverage, release_subbin_values
 from .bound import transmission_bound, bound_with_controls, BoundReport, BoundResult, BoundError
+from .report import RunRecord, ResultTable, record, show
+from .evaluate import evaluate
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundResult", "BoundError",
            "PrivacyLedger", "PrivacyAccountingError", "Schema", "Band", "SchemaError",
            "DataValidationError", "Release", "release_statistics", "ReleaseError",
@@ -22,4 +24,5 @@ __all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundRes
            "FatalAPIError", "ModelRefusalError", "RateLimitedError",
            "check_model", "ModelCapabilityError", "validated_models",
            "derive", "DerivedConfig", "select_to_release", "inclusion_weights", "pool_coverage", "release_subbin_values",
+           "RunRecord", "ResultTable", "record", "show", "evaluate",
            "__version__"]

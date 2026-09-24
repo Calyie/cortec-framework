@@ -147,9 +147,10 @@ def derive(schema, private: pd.DataFrame, *, epsilon_total: float, n_records: in
     # release budget on a query over the private data. A deterministic mechanism has a point-mass
     # output distribution, so that budget buys nothing. Default (None) is OS entropy and correct.
     if seed is not None:
-        print(f"\n  !! AUTOCONFIG WAS SEEDED (seed={seed}). Column selection is reproducible, so "
-              f"the eps_selection charged for it does NOT provide its guarantee. Use seed=None "
-              f"outside tests.\n", flush=True)
+        from . import report
+        report.emit("\n" + report.warn(f"AUTOCONFIG WAS SEEDED (seed={seed}). Column selection is reproducible, so "
+                                       f"the eps_selection charged for it does NOT provide its guarantee. Use seed=None "
+                                       f"outside tests.") + "\n")
     rng = np.random.default_rng(seed)
     y = private[schema.target].astype(str).str.strip()
     ylv = sorted(y.unique().tolist())

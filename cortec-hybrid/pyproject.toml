@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 authors = [{name = "Calister Nnona", email = "calisternnona@gmail.com"}]
 name = "cortec-hybrid"
-version = "0.1.0"
+version = "0.1.1"
 description = "Conditional-signal correction for marginal DP synthesisers (AIM/MST/PrivBayes), with no LLM dependency"
 readme = "README.md"
 requires-python = ">=3.10"

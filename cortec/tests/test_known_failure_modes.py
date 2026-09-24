@@ -527,6 +527,28 @@ def test_published_counts_are_noised_not_exact_private_counts():
     assert all(v >= 0 for r in runs for v in r[0] + r[1]), "counts must stay non-negative"
 
 
+def test_published_supports_are_never_below_n_min():
+    """Regression: a released cell's published `support` could be 0.
+
+    A cohort's published size has been clamped at n_min since the ε = 0.3 NHANES run in which a
+    469-record cohort's noised size clipped to zero and the generator gave it one row. The
+    per-cell support had no such clamp: a stored NHANES release carried a level-1 cell with
+    rate 0.078 and support 0. A cell is in the release only because it holds >= n_min records,
+    so any lower published value is impossible under the release's own rule, and
+    `generate_by_cell` allocates rows in proportion to support, so that cell would have received
+    none. The clamp is post-processing of the noised count and costs nothing.
+    """
+    s, df = demo_schema(), demo_frame()
+    supports, sizes = [], []
+    for seed in (1, 2, 3, 4, 5, 6):
+        rel = release_statistics(s, df, epsilon_total=0.3, n_min=150, seed=seed)
+        sizes += [c["cohort_size"] for c in rel.cohorts]
+        supports += [v["support"] for lv in rel.conditional_levels for v in lv["cells"].values()]
+    assert supports and min(supports) >= 150, f"a published support fell below n_min: {min(supports)}"
+    assert min(sizes) >= 150
+    assert max(supports) > 150, "the clamp must be a floor on a noised count, not a constant"
+
+
 def test_published_counts_are_charged_to_the_ledger():
     """The counts above must also APPEAR in the accounting, in their own groups.
 

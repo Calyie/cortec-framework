@@ -515,3 +515,16 @@ def test_worth_it_says_what_it_does_not_predict():
     assert "downstream" in nd, "must name what it does not predict"
     assert "both directions" in nd, "must say the direction was not stable"
     assert "held-out" in nd, "must tell the user what to do instead"
+
+
+def test_published_support_is_never_below_n_min():
+    """Same rule as cortec's release: a cell is in the table only because it holds >= n_min
+    records, so its published (noised) support is clamped there rather than at zero."""
+    from cortec_hybrid.core import release_conditional_table
+    sch, df = schema(), frame()
+    cols = tuple(sch.categorical_cols[:1])
+    supports = []
+    for seed in (1, 2, 3, 4):
+        tbl = release_conditional_table(sch, df, cols, epsilon=0.05, n_min=150, seed=seed)
+        supports += list(tbl.support.values())
+    assert supports and min(supports) >= 150 and max(supports) > 150

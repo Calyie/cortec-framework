@@ -8,8 +8,8 @@ and available on request.
 
 | Package | What it is | Tests |
 |---|---|---|
-| [`cortec/`](cortec/) | The mechanism end to end: a public stratification rule, DP histograms, a DP conditional target table, and generation from those statistics alone by a frozen model, with a utility transmission bound (Stage C) for the release package | 136 |
-| [`cortec-hybrid/`](cortec-hybrid/) | For institutions that will not put a language model in the data path: release a DP conditional table and relabel an existing marginal synthesiser's output to match it. No model server in the dependency tree | 26 |
+| [`cortec/`](cortec/) | The mechanism end to end: a public stratification rule, DP histograms, a DP conditional target table, and generation from those statistics alone by a frozen model, with a utility transmission bound (Stage C) for the release package | 151 |
+| [`cortec-hybrid/`](cortec-hybrid/) | For institutions that will not put a language model in the data path: release a DP conditional table and relabel an existing marginal synthesiser's output to match it. No model server in the dependency tree | 28 |
 
 Every guarantee the paper establishes is enforced in this code rather than documented, and every
 regression test is named after the defect it prevents: capability gating, SHA-256 hash-locked
@@ -21,7 +21,7 @@ selection from a generated pool, and an output property test.
 
 1. [`cortec/README.md`](cortec/README.md) is the setup guide: install, choose the surface and set
    the credentials, prepare the data, declare the schema, run Stage A, Stage B and Stage C,
-   evaluate, troubleshoot.
+   evaluate, troubleshoot, and print and export every stage in one standard layout.
 2. [`cortec/docs/deployment.md`](cortec/docs/deployment.md) is the operational manual for a
    regulated deployment: the architecture, the checklist, the controls mapped to NIST SP 800-226,
    ISO/IEC 27559 and HIPAA Expert Determination, the failure modes with the guardrail for each, the
@@ -40,7 +40,7 @@ pip install './cortec[anthropic]'      # Claude, recommended on AWS Bedrock
 pip install './cortec[openai]'         # GPT, recommended on Azure OpenAI
 pip install './cortec[gemini]'         # Gemini, recommended on Google Vertex AI
 pip install ./cortec-hybrid
-python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 136 + 26, offline
+python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 151 + 28, offline
 ```
 
 **Where this should run.** CoRTeC is proposed for the enterprise-hosted, tenant-isolated model

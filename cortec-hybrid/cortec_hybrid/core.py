@@ -285,7 +285,10 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
         c_scale = led.spend(f"count[{cell}]", kind="count", epsilon=eps_counts,
                             sensitivity=1.0, composition="parallel",
                             partition=str(cell), group="published_counts")
-        support[str(cell)] = int(max(0, round(len(part) + laplace_noise(rng, c_scale))))
+        # clamped at n_min, as cortec's cohort sizes and cell supports are: the cell is in the
+        # table only because it holds >= n_min records, so a lower published support is
+        # impossible under the table's own rule (post-processing of the noised count)
+        support[str(cell)] = int(max(n_min, round(len(part) + laplace_noise(rng, c_scale))))
         pos_true = float((part[schema.target].astype(str).str.strip() == schema.positive).sum())
         scale = led.spend(f"cond[{cell}]", kind="count", epsilon=eps_rates,
                           sensitivity=1.0, composition="parallel",

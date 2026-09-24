@@ -38,7 +38,7 @@ git clone https://github.com/Calyie/cortec-framework
 cd cortec-framework
 pip install ./cortec
 pip install ./cortec-hybrid
-python3 -m pytest cortec-hybrid/tests -q     # 26 tests, offline
+python3 -m pytest cortec-hybrid/tests -q     # 28 tests, offline
 ```
 
 ## 2. What you need
@@ -103,6 +103,19 @@ print(gain["verdict"])
 | `n_cells_corrected` | how many released cells were matched |
 | `worth_it`, `verdict` | true when conditional error fell by more than 0.02, with a sentence saying so |
 | `worth_it_measures`, `worth_it_does_not_predict` | what the criterion is, and what it is not |
+
+`cortec`'s output standard applies here too: `show(correct(...))` prints the result as a stage
+header, the named values, the released table, the warnings and the verdict, and returns a record
+whose `save()` writes JSON, Markdown, CSV and a before-and-after figure. Section 11 of `cortec`'s
+README and its `docs/result-format.md` describe the layout and the record.
+
+```python
+from cortec import show
+
+rec = show(correct(schema, private_df, synthetic_df, columns=("admission_type",), epsilon=0.5),
+           schema=schema.name)
+rec.save("results", "correction")
+```
 
 **Read `worth_it` for what it is.** It is a calibration criterion, meaning that conditional error
 against the released table fell by more than 0.02, and it does not predict downstream utility. We

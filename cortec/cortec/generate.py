@@ -33,6 +33,7 @@ from . import prompts
 from .models import check_model, warnings_for
 from .release import Release
 from .schema import Schema
+from . import report
 
 
 class GenerationError(RuntimeError):
@@ -1131,7 +1132,7 @@ class Generator:
                     raise                   # configuration or account faults: stop, do not retry
                 except Exception as e:
                     if verbose:
-                        print(f"    [{cohort['cohort_name']}] call failed: {e}")
+                        report.emit(report.warn(f"[{cohort['cohort_name']}] call failed: {e}"))
                     df = None
                 if df is not None and len(df):
                     if self.quota:
@@ -1145,7 +1146,7 @@ class Generator:
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
             if verbose:
-                print(f"    {cohort['cohort_name'][:38]:40s} {got}/{want} rows")
+                report.emit(report.progress(f"{cohort['cohort_name'][:38]:40s} {got}/{want} rows"))
         if not frames:
             raise GenerationError("no usable rows were generated")
         self._assert_reasoning_fired()
@@ -1262,10 +1263,10 @@ class Generator:
         # halfway with an abort that looks like a model-capability result.
         _per = n_rows / max(len(cells), 1)
         if _per < MIN_ROWS_PER_CELL:
-            print(f"  !! {n_rows} rows across {len(cells)} cells is {_per:.1f} rows per cell; "
+            report.emit(report.warn(f"{n_rows} rows across {len(cells)} cells is {_per:.1f} rows per cell; "
                   f"below ~{MIN_ROWS_PER_CELL} the per-cell prompt asks for one or two records and "
                   f"parsing degrades. Raise n_rows to >= {int(MIN_ROWS_PER_CELL*len(cells))} or "
-                  f"generate at a coarser level.")
+                  f"generate at a coarser level."))
 
         # Population-level released marginals give the prompt its distributional context; the
         # cohort a cell spans is not identified here, so we use the size-weighted mixture.
@@ -1310,7 +1311,7 @@ class Generator:
                     raise                   # configuration or account faults: stop, do not retry
                 except Exception as e:
                     if verbose:
-                        print(f"    [{key}] call failed: {e}")
+                        report.emit(report.warn(f"[{key}] call failed: {e}"))
                     df = None
                 if df is not None and len(df):
                     self.stats.parse_ok += 1
@@ -1330,8 +1331,8 @@ class Generator:
                 if self.stats.calls % self.CHECK_EVERY == 0:
                     self._checkpoint()
             if verbose:
-                print(f"    {str(key)[:40]:42s} {got}/{want} rows "
-                      f"(released rate {meta['rate']:.3f})")
+                report.emit(report.progress(f"{str(key)[:40]:42s} {got}/{want} rows "
+                      f"(released rate {meta['rate']:.3f})"))
         if not frames:
             raise GenerationError("no usable rows were generated")
         self._assert_reasoning_fired()

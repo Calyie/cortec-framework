@@ -37,6 +37,7 @@ import pandas as pd
 from .accounting import (VACUOUS_EPSILON_PER_PERSON, PrivacyLedger,
                          histogram_sensitivity, laplace_noise)
 from .schema import Band, Schema
+from . import report
 
 DEFAULT_N_MIN = 150
 
@@ -245,7 +246,7 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
             "clinical data k is routinely 10-40, which makes the per-person guarantee vacuous. "
             "Pass max_rows_per_person=... (1 if one row per person) to have it computed, checked "
             "and recorded.")
-        print(f"\n  !! {_person_warning}\n", flush=True)
+        report.emit("\n" + report.warn(_person_warning) + "\n")
     else:
         _eps_person = float(epsilon_total) * int(max_rows_per_person)
         if _eps_person > VACUOUS_EPSILON_PER_PERSON and not acknowledge_vacuous_privacy_unit:
@@ -266,7 +267,7 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
                 f"{_eps_person:.1f} ({max_rows_per_person} rows/person x epsilon_total="
                 f"{epsilon_total}). This release carries a ROW-level guarantee only. Any claim "
                 f"made from it must state the group-privacy factor.")
-            print(f"\n  !! {_person_warning}\n", flush=True)
+            report.emit("\n" + report.warn(_person_warning) + "\n")
 
     schema.validate(df, strict=True)          # before a single unit of budget is spent
     data = schema.coerce(df)
@@ -285,7 +286,7 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
             f"NOT carry the epsilon={epsilon_total} guarantee it reports: anyone with this file "
             f"and the seed can invert the noise and recover the private values. Use seed=None for "
             f"anything but a test.")
-        print(f"\n  !! {_seed_warning}\n", flush=True)
+        report.emit("\n" + report.warn(_seed_warning) + "\n")
     ledger = PrivacyLedger(epsilon_total, max_rows_per_person=max_rows_per_person)
     ledger.charge_suppression = bool(charge_suppression)
 
@@ -304,9 +305,9 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
                          stratify=derived.stratify or schema.stratify,
                          coarsen=derived.coarsen or schema.coarsen)
         for line in derived.describe().splitlines():
-            print(f"  {line}")
+            report.emit(report.note(line))
     elif schema.conditional:
-        print("  using the conditional hierarchy declared in the schema (autoconfig skipped)")
+        report.emit(report.note("using the conditional hierarchy declared in the schema (autoconfig skipped)"))
 
     # ── budget split ────────────────────────────────────────────────────────────────
     # Whatever autoconfig spent selecting the hierarchy is gone: the release itself must live on
@@ -467,7 +468,12 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
                     epsilon=eps_counts_cells / _n_viable,
                     sensitivity=1.0, composition="parallel", partition=str(cell),
                     group=f"published_counts_cells_L{li}")
-                _sup = int(max(0, round(len(part) + laplace_noise(rng, _sup_scale))))
+                # clamped at n_min, as the cohort size is: the cell is in the release only because
+                # it holds >= n_min records, so a lower published support is impossible under the
+                # release's own rule (post-processing). Unclamped, a noised support of 0 reached a
+                # stored NHANES release, and `generate_by_cell` allocates rows in proportion to
+                # support, so that cell would have received no rows at all.
+                _sup = int(max(n_min, round(len(part) + laplace_noise(rng, _sup_scale))))
                 pos_true = float((part[schema.target].astype(str).str.strip()
                                   == schema.positive).sum())
                 scale = ledger.spend(f"cond[L{li}][{cell}]", kind="count",
@@ -490,10 +496,10 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
         v["group_total"] for k, v in ledger.audit_report()["groups"].items()
         if k.startswith("conditional_L"))
     if _unspent > 0.02 * epsilon_total:
-        print(f"  !! {_unspent:.3f} of the {eps_cond:.3f} conditional budget was NOT spent: "
+        report.emit(report.warn(f"{_unspent:.3f} of the {eps_cond:.3f} conditional budget was NOT spent: "
               f"{len(schema.conditional)} levels were budgeted for but only {len(levels)} released "
               f"cells at n_min={n_min}. The release is noisier than epsilon={epsilon_total} allows. "
-              f"Use fewer conditional levels, lower n_min, or supply more records.")
+              f"Use fewer conditional levels, lower n_min, or supply more records."))
 
     # Is the conditional table SIGNAL or NOISE? The Laplace sd on a cell's rate is
     # sqrt(2) * (1/n_cell) / eps_level. If that is comparable to the spread of the released rates
@@ -510,10 +516,10 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
         _sd = math.sqrt(2.0) * (1.0 / float(np.median(_sup))) / max(eps_level, 1e-12)
         _spread = max(_rates) - min(_rates)
         if _spread > 0 and _sd / _spread >= 1.0:
-            print(f"  !! level {_lv['level']}: noise on the released rates (sd~{_sd:.3f}) is at or "
+            report.emit(report.warn(f"level {_lv['level']}: noise on the released rates (sd~{_sd:.3f}) is at or "
                   f"above their entire spread ({_spread:.3f}). This table is noise-dominated and "
                   f"cannot carry conditional structure — raise epsilon, coarsen to fewer cells, or "
-                  f"accept that conditioning will not help on this dataset.")
+                  f"accept that conditioning will not help on this dataset."))
 
     if not levels:
         raise ReleaseError(
