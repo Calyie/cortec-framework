@@ -11,7 +11,7 @@ from .core import (ConditionalTable, CorrectionError, DomainTooLargeError, check
 # this package's deliberate refusals, printed in cortec's standard layout by `cortec.guard()`
 register_refusal(CorrectionError, DomainTooLargeError)
 
-__version__ = "0.1.1"
+__version__ = "1.0.0"
 __all__ = ["ConditionalTable", "CorrectionError", "DomainTooLargeError", "check_feasible", "correct",
            "estimate_domain_size", "estimate_gain", "relabel", "release_conditional_table",
            "__version__"]

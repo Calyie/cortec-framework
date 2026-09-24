@@ -22,7 +22,7 @@ register_refusal(PrivacyAccountingError, SchemaError, DataValidationError, Relea
                  GenerationError, RateLimitedError, ModelCapabilityError, BoundError,
                  PromptIntegrityError)
 
-__version__ = "0.4.0"
+__version__ = "1.0.0"
 __all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundResult", "BoundError",
            "PrivacyLedger", "PrivacyAccountingError", "Schema", "Band", "SchemaError",
            "DataValidationError", "Release", "release_statistics", "ReleaseError",

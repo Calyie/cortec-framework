@@ -134,7 +134,7 @@ def _plain(v):
 # ── blocks ────────────────────────────────────────────────────────────────────────────
 def header(stage: str, title: str, *, tool: str = "cortec", version: str | None = None,
            enabled: bool | None = None) -> str:
-    """The rule that opens every stage: `── cortec 0.3.0 · Stage A · Release ────`."""
+    """The rule that opens every stage: `── cortec 1.0.0 · Stage A · Release ────`."""
     if version is None:
         version = _package_version(tool)
     left = f"── {tool} {version} · {stage} · {title} "

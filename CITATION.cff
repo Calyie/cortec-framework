@@ -4,7 +4,7 @@ message: "Cite the paper (Calyie/cortec) for the method; cite this repository fo
 type: software
 license: Apache-2.0
 version: "1.0.0"
-date-released: "2026-09-23"
+date-released: "2026-09-24"
 repository-code: "https://github.com/Calyie/cortec-framework"
 abstract: >-
   Two Apache-2.0 packages implementing CoRTeC, cohort-conditioned differentially private synthetic
