@@ -44,16 +44,20 @@ cortec-hybrid --help                         # the help page: what you can run, 
                                              #   (or python3 -m cortec_hybrid --help)
 ```
 
-**Run it.** `run_cortec_hybrid.py`, in this directory, runs the correction from the command line:
-the private table, the synthetic table to correct, the schema file (`SCHEMA = Schema(...)`, as in
-step 4 of `cortec`'s README) and the cell columns. With `--holdout` it also scores the table before
-and after beside a real sample and a permuted floor, which is the number `worth_it` does not give.
+**Run it.** Installing the package puts the `cortec-hybrid` command on PATH, and `cortec-hybrid
+run` runs the correction from any directory: the private table, the synthetic table to correct,
+the schema file (`SCHEMA = Schema(...)`, as in step 4 of `cortec`'s README) and the cell columns.
+With `--holdout` it also scores the table before and after beside a real sample and a permuted
+floor, which is the number `worth_it` does not give.
 
 ```bash
-python3 run_cortec_hybrid.py --data private.csv --synthetic synthetic.csv \
+cortec-hybrid run --data private.csv --synthetic synthetic.csv \
     --schema my_schema.py --columns admission_type,a1c_result --epsilon 0.5 --holdout holdout.csv
-python3 run_cortec_hybrid.py --help
+cortec-hybrid run --help
 ```
+
+`python3 run_cortec_hybrid.py`, in this directory, is the same command for a clone whose scripts
+directory is not on PATH.
 
 ## 2. What you need
 

@@ -59,11 +59,12 @@ and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
 python3 -m pytest cortec/tests -q     # 151 tests, offline, each named after the defect it prevents
 ```
 
-**Run it.** `run_cortec.py`, in this directory, runs the whole pipeline on your own table: Stage A
-(the release), Stage B (generation), Stage C (the bound) and the evaluation, printing each in the
-standard layout and writing every file under one folder that it names at the end. It needs two
-inputs: the private table as a CSV with one row per person (step 3), and a Python file that
-declares the schema from public facts only (step 4), for example:
+**Run it.** Installing the package puts the `cortec` command on PATH. `cortec run` runs the
+whole pipeline on your own table from any directory: Stage A (the release), Stage B
+(generation), Stage C (the bound) and the evaluation, printing each in the standard layout and
+writing every file under one folder that it names at the end. It needs two inputs: the private
+table as a CSV with one row per person (step 3), and a Python file that declares the schema from
+public facts only (step 4), for example:
 
 ```python
 # my_schema.py
@@ -81,15 +82,15 @@ SCHEMA = Schema(
 
 ```bash
 # offline first: no key, no spend, the whole pipeline on the mock backend
-python3 run_cortec.py --data private.csv --schema my_schema.py --backend mock
+cortec run --data private.csv --schema my_schema.py --backend mock
 
 # then a real model, with a spend cap; the run keeps the rows completed within it
 export ANTHROPIC_API_KEY=...
-python3 run_cortec.py --data private.csv --schema my_schema.py \
+cortec run --data private.csv --schema my_schema.py \
     --backend anthropic --model claude-fable-5 --n-rows 300 --budget-usd 5
 
 # every setting, with its default
-python3 run_cortec.py --help
+cortec run --help
 ```
 
 Without `--holdout`, one fifth of the data is set aside before Stage A for the Stage C ceiling
@@ -97,7 +98,8 @@ and the evaluation. The output folder (default `results/<schema name>_<backend>`
 `synthetic.csv`, `release.json` (reused by later runs into the same folder, because a release is
 made once), `bound.json`, and each stage's record as JSON, Markdown, CSV and a figure. The
 sections below explain each stage and every setting; the same calls are available from Python
-for your own scripts, and `cortec-hybrid` ships `run_cortec_hybrid.py` for the correction.
+for your own scripts, and `cortec-hybrid run` is the correction. `python3 run_cortec.py`, in
+this directory, is the same command for a clone whose scripts directory is not on PATH.
 
 For a full tour of the three stages in the standard output, with no API key and no data, run
 the bundled example (it builds a small synthetic table in code and uses the offline `mock`
@@ -113,7 +115,7 @@ documentation. The `cortec` command does nothing else: the package is a library,
 are Python calls.
 
 ```bash
-cortec --help                        # run order, functions, classes, refusals
+cortec --help                        # the commands, the run order, functions, classes, refusals
 cortec bound_with_controls           # one name in full
 cortec-hybrid --help                 # the same page for cortec-hybrid
 python3 -m cortec --help             # the same, when pip's scripts directory is not on PATH

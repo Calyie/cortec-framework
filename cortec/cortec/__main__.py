@@ -1,6 +1,6 @@
-"""The `cortec` command (also `python -m cortec`): the help page. `cortec --help` prints what you
-can run, in what order; `cortec <name>` prints one function or class with its arguments and
-defaults read from the code. The command runs nothing else: the package is a library."""
+"""The `cortec` command (also `python -m cortec`). `cortec run ...` runs the whole pipeline on your
+table (README step 1); `cortec --help` prints what you can run, in what order; `cortec <name>`
+prints one function or class with its arguments and defaults read from the code."""
 import sys
 
 import cortec
@@ -26,11 +26,17 @@ GROUPS = [                         # the other public names, by what they are
 ]
 
 
+def run(argv):
+    """the whole pipeline on your table; cortec run --help for the settings"""
+    from .run import main as run_main
+    return run_main(argv)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     return _help.main(cortec, argv, tool="cortec", module="cortec", command="cortec",
                       run_order=RUN_ORDER, groups=GROUPS, readme="README.md",
-                      example="example.py")
+                      example="example.py", subcommands={"run": run})
 
 
 if __name__ == "__main__":

@@ -139,6 +139,9 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     one = capsys.readouterr().out                               # arguments read from the code
     assert "Help · bound_with_controls" in one and "tolerance" in one and "default 0.15" in one
     assert help_main(["Generator.generate"]) == 0 and help_main(["nope"]) == 2
+    with pytest.raises(SystemExit) as e:                        # `cortec run --help` is argparse's
+        help_main(["run", "--help"])
+    assert e.value.code == 0 and "--data" in capsys.readouterr().out
 
 
 def test_save_writes_every_export_and_names_them(tmp_path):

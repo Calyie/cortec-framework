@@ -1,6 +1,6 @@
-"""The `cortec-hybrid` command (also `python -m cortec_hybrid`): the help page. `cortec-hybrid
---help` prints what you can run, in what order; `cortec-hybrid <name>` prints one function or
-class with its arguments and defaults read from the code. The command runs nothing else."""
+"""The `cortec-hybrid` command (also `python -m cortec_hybrid`). `cortec-hybrid run ...` corrects
+a synthetic table you already generated (README step 1); `cortec-hybrid --help` prints what you
+can run; `cortec-hybrid <name>` prints one function or class with its arguments and defaults."""
 import sys
 
 import cortec_hybrid
@@ -22,11 +22,17 @@ GROUPS = [
 ]
 
 
+def run(argv):
+    """correct a synthetic table you already have (--help: settings)"""
+    from .run import main as run_main
+    return run_main(argv)
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     return _help.main(cortec_hybrid, argv, tool="cortec-hybrid", module="cortec_hybrid",
                       command="cortec-hybrid", run_order=RUN_ORDER, groups=GROUPS,
-                      readme="README.md")
+                      readme="README.md", subcommands={"run": run})
 
 
 if __name__ == "__main__":

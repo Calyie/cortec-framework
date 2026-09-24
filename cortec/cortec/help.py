@@ -125,11 +125,13 @@ def _names_row(label: str, names: list[str], width: int) -> list[str]:
 
 
 def overview(package, *, tool: str, module: str, command: str, run_order, groups, readme: str,
-             example: str | None = None) -> str:
+             example: str | None = None, commands=None) -> str:
     """The page `<command> --help` prints: one screen."""
     lines = [header("Help", "What you can run", tool=tool)]
-    lines += _para(f"{tool} is a library: each step is a Python call. This page lists the calls; "
-                   f"`{command} <name>` prints one in full, with its arguments and defaults.")
+    if commands:
+        lines += [paint("  commands", "key"), kv_block(commands, indent=4), ""]
+    lines += _para(f"{tool} is a library: each step below is a Python call. `{command} <name>` "
+                   f"prints one in full, with its arguments and defaults.")
     lines += ["", paint("  run order", "key"), kv_block(run_order, indent=4)]
     listed = {n for k, _ in run_order for n in k.replace(",", " ").split() if not n[0].isdigit()}
     public = [n for n in package.__all__ if not n.startswith("__")]
@@ -212,13 +214,17 @@ def detail(package, name: str, *, tool: str, command: str) -> str | None:
 
 
 def main(package, argv, *, tool: str, module: str, command: str, run_order, groups, readme: str,
-         example: str | None = None) -> int:
-    """Behind the `cortec` and `cortec-hybrid` commands and `python -m <module>`: `--help`, `-h`
-    or no argument prints the overview; a public name prints its page; an unknown name lists
-    the public names and returns 2."""
+         example: str | None = None, subcommands: dict | None = None) -> int:
+    """Behind the `cortec` and `cortec-hybrid` commands and `python -m <module>`: a subcommand
+    (`run`) is dispatched with the rest of the arguments; `--help`, `-h` or no argument prints
+    the overview; a public name prints its page; an unknown name lists the public names and
+    returns 2."""
+    if argv and subcommands and argv[0] in subcommands:
+        return int(subcommands[argv[0]](argv[1:]) or 0)
     if not argv or argv[0] in ("-h", "--help", "help"):
+        commands = [(f"{command} {name} ...", fn.__doc__ or "") for name, fn in (subcommands or {}).items()]
         emit(overview(package, tool=tool, module=module, command=command, run_order=run_order,
-                      groups=groups, readme=readme, example=example))
+                      groups=groups, readme=readme, example=example, commands=commands))
         return 0
     page = detail(package, argv[0], tool=tool, command=command)
     if page is None:
