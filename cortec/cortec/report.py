@@ -198,6 +198,12 @@ def emit(text: str) -> None:
         print(text, flush=True)
     except BrokenPipeError:
         _stdout_open = False
+        # point stdout at /dev/null so the interpreter's final flush does not report the pipe
+        # again as "Exception ignored ... BrokenPipeError" (the recipe in the Python docs)
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
 
 
 def emit_progress(text: str) -> None:

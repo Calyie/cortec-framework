@@ -31,6 +31,8 @@ import pandas as pd
 
 def load_schema(path: str):
     """The `SCHEMA` object a user's schema file defines."""
+    if not os.path.isfile(path):
+        sys.exit(f"schema file not found: {path} (looked from {os.getcwd()})")
     spec = importlib.util.spec_from_file_location("user_schema", path)
     if spec is None or spec.loader is None:
         sys.exit(f"cannot import {path}; it must be a Python file that defines SCHEMA = Schema(...)")
@@ -46,6 +48,8 @@ def load_schema(path: str):
 
 def read_table(path: str, columns: list[str]) -> pd.DataFrame:
     """A CSV with the schema's columns, categories kept as the strings they are."""
+    if not os.path.isfile(path):
+        sys.exit(f"table not found: {path} (looked from {os.getcwd()})")
     df = pd.read_csv(path, keep_default_na=False)
     missing = [c for c in columns if c not in df.columns]
     if missing:
