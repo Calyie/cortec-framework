@@ -1,4 +1,4 @@
-"""example.py -- a runnable, self-contained tour of cortec's three stages and its output.
+"""example.py -- a runnable, self-contained tour of cortec's three stages and its standard output.
 
 No API key and no data files are needed:
 
@@ -15,8 +15,9 @@ real rows (the release and the bound are unchanged):
     Generator(schema, backend="anthropic", model="claude-fable-5")    # needs ANTHROPIC_API_KEY
     Generator(schema, backend="gemini",    model="gemini-3.5-flash")  # needs GEMINI_API_KEY
 
-Each `show(...)` also RETURNS a record whose `.save(dir, name)` exports one JSON, one Markdown, one
-CSV per table and a figure (see docs/result-format.md)."""
+This example only DISPLAYS the results. Each `show(...)` also returns a record; a real run script
+saves them with `record.save(dir, name)` (one JSON, one Markdown, one CSV per table and a figure),
+which then reports exactly which files were written -- see docs/result-format.md."""
 import numpy as np, pandas as pd
 from cortec import Schema, release_statistics, Generator, bound_with_controls, show
 
@@ -57,6 +58,6 @@ synthetic = gen.generate(release, n_rows=300).drop(columns=["_cohort", "_cell"],
 show(gen, n_rows=len(synthetic), positive_rate=float((synthetic["y"] == "YES").mean()))
 
 # Stage C -- a differentially private bound on the private-vs-synthetic conditional gap.
-report = bound_with_controls(schema, release, train, synthetic, holdout,
-                             epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
-show(report, schema=schema.name)
+bound = bound_with_controls(schema, release, train, synthetic, holdout,
+                            epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
+show(bound, schema=schema.name)
