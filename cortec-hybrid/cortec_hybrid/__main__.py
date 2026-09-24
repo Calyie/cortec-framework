@@ -21,6 +21,30 @@ GROUPS = [
     ("feasibility", ["estimate_domain_size"]),
 ]
 
+# the words this tool's output uses, then the shared ones from cortec's glossary
+TERMS = [
+    ("feasibility", "whether a marginal synthesiser (AIM) is likely to fit this schema, from the "
+                    "attribute count, the row count and high-cardinality numeric columns; the "
+                    "domain size is reported and not used"),
+    ("released conditional table, rate, support", "the DP table P(positive | cell): the rate with "
+                                                  "Laplace noise, and the cell size with noise. "
+                                                  "Cells with fewer than n_min private records "
+                                                  "are not released, and their rows are left as "
+                                                  "they were"),
+    ("conditional error (before, after)", "the mean absolute gap between each cell's target rate "
+                                          "in the table and the released rate, before and after "
+                                          "relabelling; `reduction` is the difference"),
+    ("feature marginal shift", "the mean total-variation change of the categorical marginals "
+                               "between input and output: zero, because only the target column "
+                               "is rewritten"),
+    ("cells corrected", "released cells whose rows were relabelled"),
+    ("worth it (calibration only)", "true when conditional error fell by more than 0.02. A "
+                                    "calibration criterion; it does not predict downstream "
+                                    "utility, so read the evaluation table beside it"),
+] + [t for t in _help.TERMS_CORTEC
+     if t[0] in ("epsilon", "privacy unit", "n_min", "1-way TV", "TSTR-LR, TSTR-RF, TSTR-GBM",
+                 "ceiling", "floor", "reference rows", "absent categories")]
+
 
 def run(argv):
     """correct a synthetic table you already have (--help: settings)"""
@@ -32,7 +56,7 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     return _help.main(cortec_hybrid, argv, tool="cortec-hybrid", module="cortec_hybrid",
                       command="cortec-hybrid", run_order=RUN_ORDER, groups=GROUPS,
-                      readme="README.md", subcommands={"run": run})
+                      readme="README.md", subcommands={"run": run}, terms=TERMS)
 
 
 if __name__ == "__main__":

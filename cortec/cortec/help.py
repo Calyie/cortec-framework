@@ -90,6 +90,101 @@ def _is_refusal(cls) -> bool:
     return inspect.isclass(cls) and any(issubclass(cls, t) for t in REFUSAL_TYPES)
 
 
+# ── the words in the output ───────────────────────────────────────────────────────────
+# The terms the printed records use that are this tool's own, in the order a run prints them.
+# Standard vocabulary (differential privacy, Laplace noise, AUC, the three classifiers) is not
+# repeated. `cortec terms` prints the list; `cortec <term>` prints one entry.
+TERMS_CORTEC = [
+    ("epsilon", "the differential-privacy budget; smaller is stronger. `epsilon declared` is what "
+                "you asked for and `epsilon accounted` what the ledger charged; the two are equal "
+                "when the run is within budget"),
+    ("privacy unit", "what one epsilon protects: one row, or one person when `max_rows_per_person` "
+                     "is declared; a person who contributes k rows receives k times epsilon"),
+    ("n_min", "the smallest cohort or cell that is released; smaller ones are suppressed, because "
+              "a rate over fewer records is mostly its own noise"),
+    ("cohort", "a group of records formed by a public rule over one column (a band of age, say); "
+               "each cohort has its own released histograms"),
+    ("conditional table, level, cell", "P(target | cell): the target rate in each cell of a "
+                                       "partition of the records by one or more columns. Level 0 "
+                                       "is the coarsest partition; the finest level has the most "
+                                       "cells"),
+    ("support, released size", "the number of private records in a cell or cohort, with noise "
+                               "added and charged to the budget"),
+    ("class-conditional", "histograms released once per outcome class in a cohort, where both "
+                          "classes clear n_min, so the model sees what positives and negatives "
+                          "each look like"),
+    ("queries, groups, partitions", "every released statistic is a query charged to the ledger. "
+                                    "Queries over disjoint parts of the data (partitions) share "
+                                    "one charge; the groups add up"),
+    ("yield", "rows kept divided by rows requested from the model. Rows outside the schema's "
+              "bounds or carrying an undeclared category are dropped and counted, never kept"),
+    ("positive rate", "the share of rows whose target is the positive label"),
+    ("reasoning evidence", "whether the model reported reasoning tokens on each call. Reasoning is "
+                           "the largest single effect measured, and a count that was never "
+                           "reported is not a count of zero"),
+    ("pool factor", "generate pool_factor times n rows, then keep the n whose cell counts match "
+                    "the release; 1 generates exactly n"),
+    ("utility transmission bound", "Stage C: for each released cell, a differentially private "
+                                   "estimate of the private target rate and a bound on the gap "
+                                   "between it and the synthetic rate. The bounds hold over every "
+                                   "cell at once with probability 1 - alpha. It bounds utility; it "
+                                   "is not a privacy audit"),
+    ("tolerance", "the largest per-cell gap you accept (0.15 by default). A table is within "
+                  "tolerance when its worst bound is at or below it"),
+    ("alpha", "the bound holds over every cell with probability at least 1 - alpha; 0.05 gives "
+              "95% simultaneous confidence"),
+    ("ceiling", "a real sample of the same size as the synthetic table, scored the same way: the "
+                "best any synthetic method can do at that size"),
+    ("floor", "the same real sample with its target column permuted: data with no conditional "
+              "signal at all"),
+    ("discriminating", "the test had power in this run: the ceiling is within tolerance and the "
+                       "floor is not. When it is not discriminating, the verdict on the synthetic "
+                       "table is not reported, because the test could not have told good from "
+                       "bad"),
+    ("covered, uncovered", "a released cell is covered when the synthetic table has rows in it. "
+                           "An uncovered cell scores the trivial bound 1.0, so a bound cannot be "
+                           "earned by covering a convenient subset"),
+    ("thin", "a covered cell with fewer than 20 synthetic rows; its bound rests on few rows"),
+    ("mean bound, worst bound", "the average and the largest per-cell bound; the verdict uses "
+                                "the worst"),
+    ("1-way TV", "for each column, the total-variation distance between the table's histogram and "
+                 "the real holdout's on the public bins, averaged over the columns. 0 is "
+                 "identical; lower is better"),
+    ("TSTR-LR, TSTR-RF, TSTR-GBM", "train on synthetic, test on real: a logistic regression, a "
+                                   "random forest and a gradient-boosting classifier trained on "
+                                   "the table and scored by AUC on the real holdout. Higher is "
+                                   "better; read against the ceiling and floor rows"),
+    ("absent categories", "declared categories that never appear in the table: a "
+                          "representativeness failure that no aggregate measure shows"),
+    ("reference rows", "the ceiling and floor rows of the evaluation table, printed in grey. Read "
+                       "every other row against them, not against a threshold"),
+]
+
+
+def glossary(terms, *, tool: str, command: str) -> str:
+    """The page `<command> terms` prints."""
+    lines = [header("Help", "Terms in the output", tool=tool)]
+    lines += _para(f"The words the printed records use, in the order a run prints them. Standard "
+                   f"vocabulary (differential privacy, Laplace noise, AUC, the classifiers) is not "
+                   f"repeated. `{command} <term>` prints one entry.")
+    for term, meaning in terms:
+        lines += ["", paint("  " + term, "key")] + _para(meaning, 4)
+    return "\n".join(lines)
+
+
+def term_page(terms, name: str, *, tool: str, command: str) -> str | None:
+    """The entries whose term contains `name`, or None."""
+    key = name.strip().lower()
+    hits = [(t, m) for t, m in terms if key in t.lower()]
+    if not hits:
+        return None
+    lines = [header("Help", hits[0][0] if len(hits) == 1 else name, tool=tool)]
+    for term, meaning in hits:
+        lines += ["", paint("  " + term, "key")] + _para(meaning, 4)
+    lines += ["", kv_block([(f"{command} terms", "every term in the output")], indent=2)]
+    return "\n".join(lines)
+
+
 # ── rendering ─────────────────────────────────────────────────────────────────────────
 def _para(text: str, indent: int = 2, *, role: str | None = "reference") -> list[str]:
     return [paint(line, role) for line in
@@ -156,6 +251,7 @@ def overview(package, *, tool: str, module: str, command: str, run_order, groups
                           f"or guard()"))
     more = [(f"{command} <name>", "one function or class: arguments, defaults, notes"),
             (f"{command} <Class>.<method>", "one method"),
+            (f"{command} terms", "what each word in the output means (tolerance, ceiling ...)"),
             (f"{command} --help", f"this page (or: python -m {module})")]
     if example:
         more.append((f"python {example}", "a runnable tour; no key and no data needed"))
@@ -215,11 +311,11 @@ def detail(package, name: str, *, tool: str, command: str) -> str | None:
 
 
 def main(package, argv, *, tool: str, module: str, command: str, run_order, groups, readme: str,
-         example: str | None = None, subcommands: dict | None = None) -> int:
+         example: str | None = None, subcommands: dict | None = None, terms=None) -> int:
     """Behind the `cortec` and `cortec-hybrid` commands and `python -m <module>`: a subcommand
     (`run`) is dispatched with the rest of the arguments; `--help`, `-h` or no argument prints
-    the overview; a public name prints its page; an unknown name lists the public names and
-    returns 2."""
+    the overview; `terms` prints the glossary; a public name prints its page, a term its entry;
+    an unknown name lists the public names and returns 2."""
     if argv and subcommands and argv[0] in subcommands:
         return int(subcommands[argv[0]](argv[1:]) or 0)
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -227,7 +323,12 @@ def main(package, argv, *, tool: str, module: str, command: str, run_order, grou
         emit(overview(package, tool=tool, module=module, command=command, run_order=run_order,
                       groups=groups, readme=readme, example=example, commands=commands))
         return 0
+    if argv[0] == "terms" and terms:
+        emit(glossary(terms, tool=tool, command=command))
+        return 0
     page = detail(package, argv[0], tool=tool, command=command)
+    if page is None and terms:
+        page = term_page(terms, argv[0], tool=tool, command=command)
     if page is None:
         names = ", ".join(n for n in package.__all__ if not n.startswith("__"))
         emit(header("Help", "Unknown name", tool=tool))
@@ -235,7 +336,7 @@ def main(package, argv, *, tool: str, module: str, command: str, run_order, grou
         emit("")
         for line in _para("public names: " + names, 2):
             emit(line)
-        emit(kv_block([(f"{command} --help", "the overview")]))
+        emit(kv_block([(f"{command} --help", "the overview"), (f"{command} terms", "the words in the output")]))
         return 2
     emit(page)
     return 0

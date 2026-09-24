@@ -142,6 +142,13 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     with pytest.raises(SystemExit) as e:                        # `cortec run --help` is argparse's
         help_main(["run", "--help"])
     assert e.value.code == 0 and "--data" in capsys.readouterr().out
+    # the words in the output are explained: the whole glossary, and one term by name
+    assert help_main(["terms"]) == 0
+    glossary = capsys.readouterr().out
+    for term in ("tolerance", "ceiling", "floor", "discriminating", "thin", "1-way TV", "yield"):
+        assert term in glossary, term
+    assert help_main(["discriminating"]) == 0
+    assert "the floor is not" in " ".join(capsys.readouterr().out.split())   # wrapped text
 
 
 def test_save_writes_every_export_and_names_them(tmp_path):

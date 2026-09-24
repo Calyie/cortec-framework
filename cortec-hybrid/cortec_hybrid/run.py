@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
     if a.exports == "json":
         emit(note("each JSON record renders to Markdown, CSV and a figure: --exports all, or "
                   "RunRecord.from_json(path).save(folder)"))
+    emit(note("the words above (worth it, conditional error, ceiling, floor ...): cortec-hybrid terms"))
     return 0
 
 

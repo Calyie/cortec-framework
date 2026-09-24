@@ -540,6 +540,23 @@ the paper's own rc parameters and validated palette, available to your own scrip
 `cortec.plots.paper_rcparams()`. [`docs/result-format.md`](docs/result-format.md) is the contract
 for the record and lists the tables each stage writes.
 
+**The words in the output.** `cortec terms` prints every term the records use, in the order a
+run prints them, and `cortec <term>` (for example `cortec discriminating`) prints one. The ones
+a first run meets in Stage C and the evaluation:
+
+| Term | Meaning |
+|---|---|
+| tolerance | the largest per-cell gap you accept (0.15 by default); a table is within tolerance when its worst bound is at or below it |
+| ceiling | a real sample of the synthetic table's size, scored the same way: the best any method can do at that size |
+| floor | the same real sample with its target permuted: data with no conditional signal |
+| discriminating | the test had power: the ceiling is within tolerance and the floor is not; otherwise the verdict on the synthetic table is not reported |
+| covered, thin | a released cell with synthetic rows in it; thin when fewer than 20. An uncovered cell scores the trivial bound 1.0 |
+| mean bound, worst bound | the average and the largest per-cell bound; the verdict uses the worst |
+| 1-way TV | the total-variation distance between the table's and the holdout's histogram, per column on the public bins, averaged; lower is better |
+| TSTR-LR, RF, GBM | train on synthetic, test on real: three classifiers trained on the table, scored by AUC on the holdout; higher is better, read against the ceiling and floor rows |
+| yield | rows kept divided by rows requested from the model; rows outside the schema are dropped and counted |
+| support | the number of private records in a cell or cohort, with noise added |
+
 ## Licence
 
 Apache-2.0.

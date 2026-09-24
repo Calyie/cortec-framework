@@ -128,6 +128,9 @@ status 2 instead of showing a traceback (section 10 of `cortec`'s README); `cort
 | `worth_it`, `verdict` | true when conditional error fell by more than 0.02, with a sentence saying so |
 | `worth_it_measures`, `worth_it_does_not_predict` | what the criterion is, and what it is not |
 
+`cortec-hybrid terms` prints what each word in the printed output means (conditional error,
+feature marginal shift, worth it, ceiling, floor, TSTR); `cortec-hybrid <term>` prints one.
+
 `cortec`'s output standard applies here too: `show(correct(...))` prints the result as a stage
 header, the named values, the released table, the warnings and the verdict, and returns a record
 whose `save()` writes JSON, Markdown, CSV and a before-and-after figure. Section 11 of `cortec`'s
