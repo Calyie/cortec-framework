@@ -57,6 +57,17 @@ def read_table(path: str, columns: list[str]) -> pd.DataFrame:
     return df[columns]
 
 
+def save_record(rec, out: str, stem: str, exports: str) -> dict:
+    """The stage's record on disk: the JSON alone (`exports="json"`), which holds everything
+    and renders to Markdown, CSV and a figure later through `RunRecord.from_json`, or all of
+    those now (`exports="all"`). Returns {name: path}."""
+    if exports == "all":
+        return rec.save(out, stem)
+    path = os.path.join(out, stem + ".json")
+    rec.to_json(path)
+    return {"json": path}
+
+
 def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog=prog, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -80,6 +91,9 @@ def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
     ap.add_argument("--tolerance", type=float, default=0.15, help="the Stage C tolerance (default 0.15)")
     ap.add_argument("--out", default=None, help="output folder; default results/<schema name>_<backend>")
     ap.add_argument("--no-evaluate", action="store_true", help="skip the evaluation (needs scikit-learn)")
+    ap.add_argument("--exports", choices=("json", "all"), default="json",
+                    help="json (default): one record per stage, complete; all: also the Markdown, "
+                         "CSV and figure renderings of each record")
     return ap
 
 
@@ -124,7 +138,7 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
         with open(fingerprint_path, "w", encoding="utf-8") as f:
             f.write(repr(schema))
     rec_a = show(release, n_private_rows=len(train))
-    rec_a.save(out, "stage_a_release")
+    files_a = save_record(rec_a, out, "stage_a_release", a.exports)
 
     # ---- Stage B: the model sees only the release; generation costs no privacy budget ----
     gen = Generator(schema, backend=a.backend, model=a.model, surface=a.surface,
@@ -139,14 +153,14 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
     rec_b = show(gen, n_rows=len(synthetic), positive_rate=positive_rate)
     rec_b.values.append(("positive rate in the private data",
                          float((train[schema.target].astype(str) == str(schema.positive)).mean())))
-    rec_b.save(out, "stage_b_generate")
+    files_b = save_record(rec_b, out, "stage_b_generate", a.exports)
     synthetic.to_csv(os.path.join(out, "synthetic.csv"), index=False)
 
     # ---- Stage C: a DP bound on the private-vs-synthetic conditional gap, with its own controls ----
     report = bound_with_controls(schema, release, train, synthetic, holdout,
                                  epsilon_cert=a.epsilon_cert, alpha=0.05, tolerance=a.tolerance)
     rec_c = show(report, schema=schema.name)
-    rec_c.save(out, "stage_c_bound")
+    files_c = save_record(rec_c, out, "stage_c_bound", a.exports)
     report.to_json(os.path.join(out, "bound.json"))
 
     # ---- Evaluation: fidelity and utility beside a real sample and a permuted floor ----
@@ -160,7 +174,7 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
             from cortec import evaluate
             rec_e = evaluate(schema, {"synthetic": synthetic}, train=train, holdout=holdout)
             rec_e.show()
-            files_e = rec_e.save(out, "evaluation")
+            files_e = save_record(rec_e, out, "evaluation", a.exports)
 
     emit("")
     outdir = os.path.abspath(out)
@@ -168,13 +182,16 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
     emit(note(f"{'synthetic':12s} {'the synthetic table':30s} synthetic.csv"))
     emit(note(f"{'release':12s} {'reused by later runs here':30s} release.json"))
     emit(note(f"{'Stage C':12s} {'bound report':30s} bound.json"))
-    for stage, files in (("Stage A", rec_a.files), ("Stage B", rec_b.files),
-                         ("Stage C", rec_c.files), ("evaluation", files_e)):
+    for stage, files in (("Stage A", files_a), ("Stage B", files_b),
+                         ("Stage C", files_c), ("evaluation", files_e)):
         for name, path in files.items():
             if not str(path).startswith("not written"):
                 label = name.replace("table_csv:", "table: ")
                 emit(note(f"{stage:12s} {label:30s} {os.path.basename(path)}"))
     emit(note(f"all of the above are inside  {outdir}"))
+    if a.exports == "json":
+        emit(note("each JSON record renders to Markdown, CSV and a figure: --exports all, or "
+                  "RunRecord.from_json(path).save(folder)"))
     return 0
 
 

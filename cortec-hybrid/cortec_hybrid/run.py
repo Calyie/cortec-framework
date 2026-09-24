@@ -33,13 +33,16 @@ def parser(prog: str = "cortec-hybrid run") -> argparse.ArgumentParser:
     ap.add_argument("--max-rows-per-person", type=int, default=1, help="the privacy unit (default 1)")
     ap.add_argument("--holdout", help="real rows not in --data (CSV); enables the before/after evaluation")
     ap.add_argument("--out", default=None, help="output folder; default: the synthetic table's folder")
+    ap.add_argument("--exports", choices=("json", "all"), default="json",
+                    help="json (default): one record per step, complete; all: also the Markdown, "
+                         "CSV and figure renderings of each record")
     return ap
 
 
 def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
     from cortec import install_guard, show
     from cortec.report import emit, header, kv_block, note, warn
-    from cortec.run import load_schema, read_table
+    from cortec.run import load_schema, read_table, save_record
     from cortec_hybrid import check_feasible, correct
 
     install_guard()
@@ -63,7 +66,7 @@ def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
     rec = show(triple, schema=schema.name, n_rows=len(synthetic),
                positive_rate_before=before, positive_rate_after=after)
     corrected.to_csv(os.path.join(out, "corrected.csv"), index=False)
-    files = rec.save(out, "correction")
+    files = save_record(rec, out, "correction", a.exports)
 
     files_e: dict = {}
     if a.holdout:
@@ -77,7 +80,7 @@ def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
             rec_e = evaluate(schema, {"before": synthetic, "after": corrected},
                              train=private, holdout=holdout)
             rec_e.show()
-            files_e = rec_e.save(out, "evaluation")
+            files_e = save_record(rec_e, out, "evaluation", a.exports)
     else:
         emit(note("no --holdout given: the before/after evaluation was skipped; worth_it alone does "
                   "not say whether downstream utility improved"))
@@ -92,6 +95,9 @@ def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
                 label = name.replace("table_csv:", "table: ")
                 emit(note(f"{stage:12s} {label:30s} {os.path.basename(path)}"))
     emit(note(f"all of the above are inside  {outdir}"))
+    if a.exports == "json":
+        emit(note("each JSON record renders to Markdown, CSV and a figure: --exports all, or "
+                  "RunRecord.from_json(path).save(folder)"))
     return 0
 
 

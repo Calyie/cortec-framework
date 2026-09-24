@@ -96,7 +96,8 @@ cortec run --help
 Without `--holdout`, one fifth of the data is set aside before Stage A for the Stage C ceiling
 and the evaluation. The output folder (default `results/<schema name>_<backend>`) holds
 `synthetic.csv`, `release.json` (reused by later runs into the same folder, because a release is
-made once), `bound.json`, and each stage's record as JSON, Markdown, CSV and a figure. The
+made once), `bound.json`, and one JSON record per stage; `--exports all` also writes each
+record's Markdown, CSV and figure, which `RunRecord.from_json` can produce later from the JSON. The
 sections below explain each stage and every setting; the same calls are available from Python
 for your own scripts, and `cortec-hybrid run` is the correction. `python3 run_cortec.py`, in
 this directory, is the same command for a clone whose scripts directory is not on PATH.
