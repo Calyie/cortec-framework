@@ -103,12 +103,38 @@ def test_record_refuses_a_file_of_another_format(tmp_path):
         RunRecord.from_json(str(p))
 
 
-def test_render_has_header_values_table_warning_verdict_in_that_order():
+def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     out = _record().render()
     parts = ["── cortec", "Evaluation", "schema", "toy", "fidelity and utility", "!! one warning", "fine", "a note"]
     positions = [out.find(p) for p in parts]
     assert all(p >= 0 for p in positions) and positions == sorted(positions)
     assert "\x1b[" not in out
+    # a deliberate refusal prints in the same layout and exits, instead of a traceback ...
+    from cortec import DataValidationError
+    from cortec.report import guard
+    with pytest.raises(SystemExit) as e, guard():
+        raise DataValidationError("column 'x' is missing. NO privacy budget was spent.")
+    assert e.value.code == 2
+    out = capsys.readouterr().out
+    parts = ["── cortec", "Refused · Data Validation", "refused by", "DataValidationError",
+             "reason", "NO privacy budget was spent", "not a fault in the tool"]
+    positions = [out.find(p) for p in parts]
+    assert all(p >= 0 for p in positions) and positions == sorted(positions)
+    # ... while anything that is not a registered refusal keeps its traceback
+    with pytest.raises(KeyError), guard():
+        raise KeyError("a fault, not a refusal")
+    # the help page (`python -m cortec`) lists every public callable with its real signature
+    import cortec
+    from cortec.__main__ import main as help_main
+    assert help_main([]) == 0
+    page = capsys.readouterr().out
+    assert "── cortec" in page and "Help · What you can run" in page and "run order" in page
+    for name in cortec.__all__:
+        if callable(getattr(cortec, name, None)):
+            assert name in page, name
+    assert "bound_with_controls(schema: Schema, release: Release" in page   # read from the code
+    assert help_main(["bound_with_controls"]) == 0 and help_main(["nope"]) == 2
+    assert "Help · bound_with_controls" in capsys.readouterr().out
 
 
 def test_save_writes_every_export_and_names_them(tmp_path):

@@ -28,6 +28,8 @@ import numbers
 import os
 import re
 import sys
+import textwrap
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -224,6 +226,74 @@ def emit_progress_done() -> None:
             sys.stderr.flush()
     except (BrokenPipeError, ValueError, OSError):
         pass
+
+
+# ── refusals ──────────────────────────────────────────────────────────────────────────
+# Both tools stop on purpose in defined situations: a schema that does not match the data, a
+# model outside the validated set, a table no cell of which reaches n_min, a budget that would
+# give one person a vacuous guarantee. Each is raised as one of the packages' own exception
+# classes, registered here, so that a run script can print it in the standard layout and exit
+# instead of showing a traceback. Any other exception is a fault and keeps its traceback.
+REFUSAL_TYPES: list[type[BaseException]] = []
+REFUSAL_EXIT_CODE = 2
+
+
+def register_refusal(*types: type[BaseException]) -> None:
+    """Declare exception classes as deliberate refusals, rendered by `guard()`."""
+    for t in types:
+        if t not in REFUSAL_TYPES:
+            REFUSAL_TYPES.append(t)
+
+
+def _tool_of(exc: BaseException) -> str:
+    return "cortec-hybrid" if exc.__class__.__module__.startswith("cortec_hybrid") else "cortec"
+
+
+def render_refusal(exc: BaseException, *, tool: str | None = None,
+                   enabled: bool | None = None) -> str:
+    """A refusal in the standard layout: the stage header, the class that refused, the reason
+    wrapped to the page width, and how to read it. `guard()` prints exactly this."""
+    name = exc.__class__.__name__
+    title = re.sub(r"(?<!^)(?=[A-Z])", " ", re.sub(r"Error$", "", name)).strip() or name
+    lines = [header("Refused", title, tool=tool or _tool_of(exc), enabled=enabled),
+             kv_block([("refused by", name)], enabled=enabled),
+             paint("  reason", "key", enabled=enabled)]
+    for para in str(exc).split("\n"):
+        for w in textwrap.wrap(para, WIDTH - 4) or [""]:
+            lines.append(paint("    " + w, "refusal", enabled=enabled))
+    lines.append("")
+    reading = ("The tool stopped on purpose; this is a refusal, not a fault in the tool. "
+               "Change the input or the setting the reason names and run again.")
+    lines.extend(note(w, enabled=enabled) for w in textwrap.wrap(reading, WIDTH - 2))
+    return "\n".join(lines)
+
+
+@contextmanager
+def guard(*, exit_code: int = REFUSAL_EXIT_CODE):
+    """Wrap a run so a refusal by either package prints in the standard layout and exits with
+    `exit_code`; any other exception keeps its traceback. `with guard(): ...`"""
+    try:
+        yield
+    except tuple(REFUSAL_TYPES) as e:
+        emit_progress_done()
+        emit(render_refusal(e))
+        raise SystemExit(exit_code) from None
+
+
+def install_guard(*, exit_code: int = REFUSAL_EXIT_CODE) -> None:
+    """The same as `guard()` for a whole script: one call at the top installs an exception hook
+    that renders a registered refusal and exits, and hands every other exception to the default
+    hook unchanged. Interactive shells and notebooks ignore the hook; use `guard()` there."""
+    previous = sys.excepthook
+
+    def hook(exc_type, exc, tb):
+        if isinstance(exc, tuple(REFUSAL_TYPES)):
+            emit_progress_done()
+            emit(render_refusal(exc))
+            sys.exit(exit_code)
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = hook
 
 
 # ── tables ────────────────────────────────────────────────────────────────────────────

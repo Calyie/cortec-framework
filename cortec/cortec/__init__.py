@@ -13,8 +13,14 @@ from .models import check_model, ModelCapabilityError, validated_models
 from .autoconfig import derive, DerivedConfig
 from .select import select_to_release, inclusion_weights, pool_coverage, release_subbin_values
 from .bound import transmission_bound, bound_with_controls, BoundReport, BoundResult, BoundError
-from .report import RunRecord, ResultTable, record, show
+from .prompts import PromptIntegrityError
+from .report import RunRecord, ResultTable, record, show, guard, install_guard, register_refusal
 from .evaluate import evaluate
+
+# the package's deliberate refusals, printed in the standard layout by `guard()` (README §11)
+register_refusal(PrivacyAccountingError, SchemaError, DataValidationError, ReleaseError,
+                 GenerationError, RateLimitedError, ModelCapabilityError, BoundError,
+                 PromptIntegrityError)
 
 __version__ = "0.4.0"
 __all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundResult", "BoundError",
@@ -25,4 +31,5 @@ __all__ = ["transmission_bound", "bound_with_controls", "BoundReport", "BoundRes
            "check_model", "ModelCapabilityError", "validated_models",
            "derive", "DerivedConfig", "select_to_release", "inclusion_weights", "pool_coverage", "release_subbin_values",
            "RunRecord", "ResultTable", "record", "show", "evaluate",
+           "guard", "install_guard", "register_refusal", "PromptIntegrityError",
            "__version__"]

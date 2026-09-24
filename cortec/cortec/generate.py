@@ -37,7 +37,7 @@ from . import report
 
 
 class GenerationError(RuntimeError):
-    pass
+    """Stage B stopped: the message names the parse or yield fault, or the API condition."""
 
 
 class ContextTruncationError(GenerationError):

@@ -40,6 +40,7 @@ pip install ./cortec
 pip install ./cortec-hybrid
 pip install './cortec[dev]'                   # pytest, for the tests
 python3 -m pytest cortec-hybrid/tests -q     # 28 tests, offline
+python3 -m cortec_hybrid                     # the help page: what you can run, with the arguments
 ```
 
 ## 2. What you need
@@ -79,6 +80,12 @@ print(gain["verdict"])
 | `epsilon` | required | the budget for the table; cells partition the data, so the whole table costs this once, however many cells it holds |
 | `n_min` | `150` | cells with fewer private records are not released; the floor is 50 |
 | `seed` | `None` | tests only: a seeded release is reproducible and carries no guarantee |
+
+When the correction is refused (no cell reaches `n_min`, a column the schema does not declare,
+a vacuous privacy unit), it raises `CorrectionError` before any budget is spent. `cortec`'s
+`install_guard()` or `with guard():` prints the refusal in the standard layout and exits with
+status 2 instead of showing a traceback (section 10 of `cortec`'s README); `python3 -m
+cortec_hybrid` prints this package's help page.
 
 `correct()` is four steps, each available on its own:
 

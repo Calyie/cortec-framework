@@ -67,6 +67,16 @@ backend, so the release and the bound are real and only the generated numbers ar
 python3 example.py
 ```
 
+For the list of everything the package can run, in order, with each function's arguments and
+defaults read from the code, print the help page; give it a name for one function's full
+documentation:
+
+```bash
+python3 -m cortec                        # run order, functions, classes, refusals
+python3 -m cortec bound_with_controls    # one name in full
+python3 -m cortec_hybrid                 # the same page for cortec-hybrid
+```
+
 ## 2. Choose where the model runs, and set the credentials
 
 The generator is called through one of four backends, and three of them can reach either the
@@ -411,6 +421,32 @@ chance and zero exact matches on any dataset. That is evidence about the publish
 proof about the corpus.
 
 ## 10. Troubleshooting
+
+Each row below is a refusal: the tool stopping on purpose, before spending budget or writing
+output it cannot stand behind. In a run script, print refusals in the standard layout instead of
+a traceback by adding one line at the top, or by wrapping the run:
+
+```python
+from cortec import install_guard
+install_guard()          # a refusal prints as a boxed block and exits with status 2
+
+from cortec import guard
+with guard():            # the same, for one block (works in notebooks too)
+    ...
+```
+
+```
+── cortec 0.4.0 · Refused · Data Validation ────────────────────────────────────────────
+  refused by  DataValidationError
+  reason
+    column 'income' is missing from the data. NO privacy budget was spent.
+
+  The tool stopped on purpose; this is a refusal, not a fault in the tool. Change the input
+  or the setting the reason names and run again.
+```
+
+Only the classes in this table (and `cortec-hybrid`'s) are treated as refusals; any other
+exception is a fault and keeps its traceback.
 
 | What you see | Why | What to do |
 |---|---|---|

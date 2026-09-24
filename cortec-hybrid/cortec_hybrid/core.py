@@ -70,6 +70,11 @@ class DomainTooLargeError(RuntimeError):
     """The schema's domain is large enough that the marginal synthesiser is unlikely to finish."""
 
 
+class CorrectionError(ValueError):
+    """The correction was refused before any budget was spent; the message names the input or
+    the setting to change. A ValueError, so existing handlers keep working."""
+
+
 @dataclass
 class ConditionalTable:
     """A DP table of P(target = positive | cell) over a disjoint partition."""
@@ -238,20 +243,20 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
     what makes a rich table affordable, and richness is what makes the correction work at all.
     """
     if n_min < 50:
-        raise ValueError(
+        raise CorrectionError(
             f"n_min={n_min} is below the safe floor of 50: a rate over fewer records is dominated "
             f"by its own Laplace noise.")
     # the cell columns must be schema features; a typo used to surface as a pandas KeyError
     known = list(schema.numerical) + list(schema.categorical)
     if not columns:
-        raise ValueError("columns is empty: name at least one schema column to build the cells over")
+        raise CorrectionError("columns is empty: name at least one schema column to build the cells over")
     for c in columns:
         if c == schema.target:
-            raise ValueError(
+            raise CorrectionError(
                 f"column '{c}' is the target: the cells are built over features, and the target "
                 f"is what the table conditions on. NO privacy budget was spent.")
         if c not in known:
-            raise ValueError(
+            raise CorrectionError(
                 f"column '{c}' is not in the schema; the cells can be built over: "
                 f"{', '.join(known)}. NO privacy budget was spent.")
     schema.validate(df, strict=True)     # before any budget is spent
@@ -265,7 +270,7 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
     if max_rows_per_person is not None:
         _eps_person = float(epsilon) * int(max_rows_per_person)
         if _eps_person > VACUOUS_EPSILON_PER_PERSON and not acknowledge_vacuous_privacy_unit:
-            raise ValueError(
+            raise CorrectionError(
                 f"REFUSED: max_rows_per_person={max_rows_per_person} at epsilon={epsilon} gives "
                 f"epsilon_per_person={_eps_person:.1f}, past the "
                 f"{VACUOUS_EPSILON_PER_PERSON:.0f} beyond which a per-person guarantee carries no "
@@ -311,7 +316,7 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
                                          0.0, 1.0))
 
     if not cells:
-        raise ValueError(
+        raise CorrectionError(
             f"no cell reached n_min={n_min}; the table is empty and would correct nothing. "
             f"Use fewer conditioning columns or lower n_min.")
     led.assert_within_budget()

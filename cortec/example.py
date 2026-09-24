@@ -19,7 +19,12 @@ This example only DISPLAYS the results. Each `show(...)` also returns a record; 
 saves them with `record.save(dir, name)` (one JSON, one Markdown, one CSV per table and a figure),
 which then reports exactly which files were written -- see docs/result-format.md."""
 import numpy as np, pandas as pd
-from cortec import Schema, release_statistics, Generator, bound_with_controls, show
+from cortec import Schema, release_statistics, Generator, bound_with_controls, show, install_guard
+
+# When the tool declines to proceed (a schema that does not match the data, a model outside the
+# validated set, a bound with no covered cell), print the refusal in the same layout and exit,
+# instead of a traceback. A fault that is not a refusal still shows its traceback.
+install_guard()
 
 
 def synthetic_private_table(n, seed):

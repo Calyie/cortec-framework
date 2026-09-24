@@ -147,10 +147,22 @@ def test_n_min_floor_is_enforced():
         release_conditional_table(schema(), frame(), ("edu",), epsilon=0.5, n_min=10)
 
 
-def test_empty_table_is_refused_rather_than_silently_correcting_nothing():
-    with pytest.raises(ValueError, match="correct nothing"):
+def test_empty_table_is_refused_rather_than_silently_correcting_nothing(capsys):
+    from cortec.report import REFUSAL_TYPES, guard
+    from cortec_hybrid import CorrectionError
+    with pytest.raises(CorrectionError, match="correct nothing"):
         release_conditional_table(schema(), frame(n=300), ("edu", "region"),
                                   epsilon=0.5, n_min=250)
+    # the refusal is registered with cortec's guard, so a run script prints it in the standard
+    # layout and exits instead of showing a traceback
+    assert CorrectionError in REFUSAL_TYPES
+    with pytest.raises(SystemExit) as e, guard():
+        release_conditional_table(schema(), frame(n=300), ("edu", "region"),
+                                  epsilon=0.5, n_min=250)
+    assert e.value.code == 2
+    out = capsys.readouterr().out
+    assert "cortec-hybrid" in out and "Refused · Correction" in out
+    assert "correct nothing" in out and "not a fault in the tool" in out
 
 
 # ── the correction itself ───────────────────────────────────────────────────────────

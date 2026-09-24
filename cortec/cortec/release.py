@@ -43,7 +43,7 @@ DEFAULT_N_MIN = 150
 
 
 class ReleaseError(RuntimeError):
-    pass
+    """Stage A could not release as asked; the message names the setting or the data to change."""
 
 
 @dataclass
