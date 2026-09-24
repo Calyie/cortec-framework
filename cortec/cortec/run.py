@@ -34,6 +34,9 @@ def load_schema(path: str):
     spec = importlib.util.spec_from_file_location("user_schema", path)
     if spec is None or spec.loader is None:
         sys.exit(f"cannot import {path}; it must be a Python file that defines SCHEMA = Schema(...)")
+    folder = os.path.dirname(os.path.abspath(path))
+    if folder not in sys.path:               # so the schema file can import a sibling module
+        sys.path.insert(0, folder)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     if not hasattr(module, "SCHEMA"):
@@ -98,7 +101,15 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
     release_path = os.path.join(out, "release.json")
 
     # ---- Stage A: the only step that reads the private data; the budget is spent here, once ----
+    # The schema the release was made from is stored beside it, so a run into the same folder
+    # with a different schema (other bins, another hierarchy) is refused instead of silently
+    # generating from a release that does not match.
+    fingerprint_path = os.path.join(out, "release_schema.txt")
     if os.path.exists(release_path):
+        stored = open(fingerprint_path, encoding="utf-8").read() if os.path.exists(fingerprint_path) else None
+        if stored is not None and stored != repr(schema):
+            sys.exit(f"{release_path} was made from a different schema than {a.schema}; a release "
+                     f"belongs to its schema. Use another --out for this schema.")
         release = Release.from_json(release_path)
         emit(note(f"Stage A: reusing {release_path} (a release is made once; re-running would spend "
                   f"the budget again; use another --out for a new release)"))
@@ -106,6 +117,8 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
         release = release_statistics(schema, train, epsilon_total=a.epsilon_total, n_min=a.n_min,
                                      max_rows_per_person=a.max_rows_per_person, n_records=a.n_rows)
         release.to_json(release_path)
+        with open(fingerprint_path, "w", encoding="utf-8") as f:
+            f.write(repr(schema))
     rec_a = show(release, n_private_rows=len(train))
     rec_a.save(out, "stage_a_release")
 
