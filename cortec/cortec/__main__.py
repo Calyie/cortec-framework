@@ -1,6 +1,6 @@
 """The `cortec` command (also `python -m cortec`): the help page. `cortec --help` prints what you
-can run, in what order, with every argument and default read from the code; `cortec <name>`
-prints one name's full documentation. The command runs nothing else: the package is a library."""
+can run, in what order; `cortec <name>` prints one function or class with its arguments and
+defaults read from the code. The command runs nothing else: the package is a library."""
 import sys
 
 import cortec
@@ -16,11 +16,21 @@ RUN_ORDER = [                      # the value column fits the page width after 
     ("   install_guard, guard", "print a refusal in that layout, not a traceback (README 10)"),
 ]
 
+GROUPS = [                         # the other public names, by what they are
+    ("results", ["Release", "BoundReport", "BoundResult", "RunRecord", "ResultTable"]),
+    ("selection", ["select_to_release", "inclusion_weights", "pool_coverage",
+                   "release_subbin_values"]),
+    ("models", ["check_model", "validated_models"]),
+    ("hierarchy", ["derive", "DerivedConfig"]),
+    ("privacy", ["PrivacyLedger", "Band", "transmission_bound", "register_refusal"]),
+]
+
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     return _help.main(cortec, argv, tool="cortec", module="cortec", command="cortec",
-                      run_order=RUN_ORDER, readme="README.md", example="example.py")
+                      run_order=RUN_ORDER, groups=GROUPS, readme="README.md",
+                      example="example.py")
 
 
 if __name__ == "__main__":

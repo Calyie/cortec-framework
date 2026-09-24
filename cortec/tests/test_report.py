@@ -126,15 +126,19 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     # the help page (`python -m cortec`) lists every public callable with its real signature
     import cortec
     from cortec.__main__ import main as help_main
-    assert help_main(["--help"]) == 0 and help_main(["-h"]) == 0 and help_main([]) == 0
+    assert help_main(["--help"]) == 0 and help_main(["-h"]) == 0
+    capsys.readouterr()
+    assert help_main([]) == 0
     page = capsys.readouterr().out
     assert "── cortec" in page and "Help · What you can run" in page and "run order" in page
     for name in cortec.__all__:
         if callable(getattr(cortec, name, None)):
             assert name in page, name
-    assert "bound_with_controls(schema: Schema, release: Release" in page   # read from the code
-    assert help_main(["bound_with_controls"]) == 0 and help_main(["nope"]) == 2
-    assert "Help · bound_with_controls" in capsys.readouterr().out
+    assert page.count("\n") < 60                                 # one screen, not a reference dump
+    assert help_main(["bound_with_controls"]) == 0
+    one = capsys.readouterr().out                               # arguments read from the code
+    assert "Help · bound_with_controls" in one and "tolerance" in one and "default 0.15" in one
+    assert help_main(["Generator.generate"]) == 0 and help_main(["nope"]) == 2
 
 
 def test_save_writes_every_export_and_names_them(tmp_path):

@@ -1,6 +1,6 @@
 """The `cortec-hybrid` command (also `python -m cortec_hybrid`): the help page. `cortec-hybrid
---help` prints what you can run, in what order, with every argument and default read from the
-code; `cortec-hybrid <name>` prints one name's documentation. The command runs nothing else."""
+--help` prints what you can run, in what order; `cortec-hybrid <name>` prints one function or
+class with its arguments and defaults read from the code. The command runs nothing else."""
 import sys
 
 import cortec_hybrid
@@ -16,11 +16,17 @@ RUN_ORDER = [                      # the value column fits the page width after 
     ("   cortec.install_guard", "print a refusal in that layout, not a traceback"),
 ]
 
+GROUPS = [
+    ("results", ["ConditionalTable"]),
+    ("feasibility", ["estimate_domain_size"]),
+]
+
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     return _help.main(cortec_hybrid, argv, tool="cortec-hybrid", module="cortec_hybrid",
-                      command="cortec-hybrid", run_order=RUN_ORDER, readme="README.md")
+                      command="cortec-hybrid", run_order=RUN_ORDER, groups=GROUPS,
+                      readme="README.md")
 
 
 if __name__ == "__main__":
