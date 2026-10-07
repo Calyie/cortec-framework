@@ -347,7 +347,8 @@ def test_a_query_over_all_records_is_not_absorbed_by_a_parallel_max():
     for c in range(5):
         led.spend(f"cohort{c}", kind="histogram", epsilon=0.9, sensitivity=1.0,
                   composition="parallel", partition=f"c{c}", group="marginals")
-    led.spend_suppression_counts(epsilon=0.1)      # own group, reads everything
+    led.spend("whole_dataset_count", kind="count", epsilon=0.1, sensitivity=1.0,
+              composition="parallel", partition="__all__", group="whole_dataset")  # reads everything
     assert led.total_epsilon == pytest.approx(1.0), \
         "a whole-dataset query must ADD to the disjoint cohort cost, not hide inside its max"
 
@@ -1904,9 +1905,13 @@ def test_a_published_cohort_size_never_falls_below_n_min(monkeypatch):
     def fake(rng_, scale, size=None):
         # drive only the cohort-size draw to a huge negative value; every other query keeps real noise
         caller = sys._getframe(1)
-        if size is None and caller.f_code.co_filename == RL.__file__ and "_cs = int(max(n_min" in src_lines[caller.f_lineno - 1]:
+        if size is None and caller.f_code.co_filename == RL.__file__ and "_cs_noisy = len(part) + laplace_noise" in src_lines[caller.f_lineno - 1]:
             return -1e6
         return real(rng_, scale, size)
     monkeypatch.setattr(RL, "laplace_noise", fake)
-    rel = RL.release_statistics(schema, df, epsilon_total=0.3, n_min=150, max_rows_per_person=1, autoconfig=False, seed=1)
+    # charge_suppression=False: the gate reads the exact count, so the cohort is released and the
+    # clamp is what keeps its published size at the floor. Under the default noisy threshold a
+    # count driven to -1e6 is simply not released, which is the correct behaviour.
+    rel = RL.release_statistics(schema, df, epsilon_total=0.3, n_min=150, max_rows_per_person=1,
+                                autoconfig=False, seed=1, charge_suppression=False)
     assert rel.cohorts and all(c["cohort_size"] >= 150 for c in rel.cohorts)

@@ -96,9 +96,10 @@ DP_CAVEATS = [
     "This is a UTILITY TRANSMISSION BOUND computed under DP. It bounds how far the synthetic "
     "conditional structure can differ from the private one; it does NOT attest to privacy, says "
     "nothing about re-identification risk, and must never be presented as a privacy audit.",
-    "Which cells enter the bound is decided by the release (a cell was released only if it held "
-    "at least n_min records). The release's own accounting record says whether that suppression "
-    "decision was charged.",
+    "Which cells enter the bound is decided by the release. With charge_suppression=True, the "
+    "default, a cell was released only if its noised, charged support reached n_min, so the "
+    "selection is post-processing; with charge_suppression=False it read the exact counts. The "
+    "release's accounting record says which rule applied.",
     "Cells for which the synthetic data supplies no rows are scored at the trivial bound of 1.0, "
     "so a bound cannot be obtained by covering a convenient subset of the cells.",
 ]

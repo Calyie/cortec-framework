@@ -29,6 +29,7 @@ import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
+import itertools
 import math
 
 import numpy as np
@@ -152,6 +153,40 @@ def _cell_keys(df: pd.DataFrame, cols: tuple[str, ...], schema: Schema) -> pd.Se
                 v = v.map(lambda x: cmap.get(x, x))
             parts.append(c + "=" + v)
     return pd.Series([" & ".join(t) for t in zip(*parts)], index=df.index)
+
+
+def _cohort_domain(schema: Schema) -> list[str]:
+    """Every cohort name the PUBLIC stratification rule can produce, sorted.
+
+    The release queries each of them, present in the data or not, so that the set of queried
+    cohorts is a function of the public schema alone.
+    """
+    if not schema.stratify:
+        return ["all"]
+    parts = []
+    for col, bands in schema.stratify:
+        if col in schema.numerical:
+            parts.append([b.name for b in bands])
+        else:
+            parts.append([str(v).strip() for v in schema.categorical[col]])
+    return sorted(" & ".join(t) for t in itertools.product(*parts))
+
+
+def _cell_domain(schema: Schema, cols: tuple[str, ...]) -> list[str]:
+    """Every cell key one conditional level can produce under the public domains, sorted."""
+    if not cols:
+        return ["*"]
+    parts = []
+    for c in cols:
+        if c in schema.numerical:
+            edges = schema.bin_edges(c)
+            parts.append([f"{c}[{edges[i]:g},{edges[i+1]:g})" for i in range(len(edges) - 1)])
+        else:
+            cmap = (schema.coarsen or {}).get(c) or {}
+            vals = sorted({str(cmap.get(str(v).strip(), str(v).strip()))
+                           for v in schema.categorical[c]})
+            parts.append([c + "=" + v for v in vals])
+    return sorted(" & ".join(t) for t in itertools.product(*parts))
 
 
 def _with_release_warnings(audit: dict, *, seed_warning: str | None = None,
@@ -327,21 +362,22 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
     # in one group would let the parallel max() absorb one of them and under-charge, which is the
     # same mistake the suppression note above records.
     eps_counts = 0.05 * eps_available
-    eps_counts_cohorts = 0.5 * eps_counts
-    eps_counts_cells = eps_counts - eps_counts_cohorts
     eps_marg -= eps_counts
-
     if charge_suppression:
-        # Charge the suppression decision out of the marginal share rather than silently
-        # treating private counts as public.
+        # Which cohorts, class blocks and cells appear is decided from their NOISED counts, never
+        # from the exact ones, so each decision is post-processing of a charged query: a noisy
+        # threshold against the public floor n_min. The share once spent on a separate
+        # "suppression" ledger entry now strengthens the count queries that make those decisions.
+        # The separate entry protected nothing: it charged epsilon while the decision still read
+        # the exact count, and a deterministic function of private data is not made private by
+        # paying for it. With charge_suppression=False the gate reads the exact counts, which is
+        # the treatment of the marginal-synthesis literature; the audit records the choice and the
+        # stated guarantee does not cover those decisions.
         eps_supp = min(0.05 * eps_available, 0.25 * eps_marg)
         eps_marg -= eps_supp
-        # Its own group, NOT "marginals". The suppression counts read every record, so this query
-        # is not disjoint from any cohort's queries and must compose sequentially with them.
-        # Filing it under "marginals" put it in the parallel max() alongside the per-cohort
-        # partitions, where the larger cohort cost absorbed it and the release under-charged by
-        # exactly eps_supp — an under-charge is a false privacy claim, so the grouping matters.
-        ledger.spend_suppression_counts(epsilon=eps_supp, group="suppression")
+        eps_counts += eps_supp
+    eps_counts_cohorts = 0.5 * eps_counts
+    eps_counts_cells = eps_counts - eps_counts_cohorts
 
     keys = _cohort_keys(schema, data)
     n_queries_per_cohort = len(schema.numerical) + len(schema.categorical) + 1  # +1 class balance
@@ -349,17 +385,27 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
 
     # ── per-cohort marginals ────────────────────────────────────────────────────────
     cohorts: list[dict] = []
-    for cid, (name, part) in enumerate(sorted(data.groupby(keys), key=lambda kv: str(kv[0]))):
-        if len(part) < n_min:
-            continue
+    _observed = {str(k): idx for k, idx in data.groupby(keys).groups.items()}
+    for cid, name in enumerate(_cohort_domain(schema)):
+        # Every cohort of the PUBLIC stratification domain is queried, present in the data or
+        # not, and the n_min gate reads the noised count. Iterating only over cohorts present in
+        # the data would make the set of queried cohorts itself depend on the data, which pure
+        # epsilon-DP does not allow.
+        part = data.loc[_observed.get(name, [])]
         _cs_scale = ledger.spend(f"count[cohort][{name}]", kind="count",
                                  epsilon=eps_counts_cohorts, sensitivity=1.0,
                                  composition="parallel", partition=str(name),
                                  group="published_counts_cohorts")
-        # clamped at n_min: the cohort exists in the release only because it holds >= n_min records,
-        # so a lower published size is impossible under the release's own rule (post-processing);
-        # unclamped, a tight budget zeroed a 469-record cohort and the generator allocated it 1 row
-        _cs = int(max(n_min, round(len(part) + laplace_noise(rng, _cs_scale))))
+        _cs_noisy = len(part) + laplace_noise(rng, _cs_scale)
+        if charge_suppression:
+            if _cs_noisy < n_min:          # noisy threshold: post-processing of the charged count
+                continue
+        elif len(part) < n_min:            # exact-count gate: the literature's treatment, uncharged
+            continue
+        # clamped at n_min: under the noisy threshold the published size is already there; under
+        # the exact-count gate the clamp keeps a tight budget from zeroing a 469-record cohort,
+        # which once left the generator allocating it 1 row (post-processing either way)
+        _cs = int(max(n_min, round(_cs_noisy)))
         entry = {"cohort_id": cid, "cohort_name": str(name), "cohort_size": _cs,
                  "numerical": {}, "categorical": {}, "class_balance": {}}
 
@@ -401,7 +447,11 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
         entry["class_balance"] = {schema.positive: round(float(noisy[0] / tot), 5),
                                   schema.negative: round(float(noisy[1] / tot), 5)}
 
-        if class_conditional and is_pos.sum() >= n_min and (~is_pos).sum() >= n_min:
+        if charge_suppression:
+            _both_clear = bool(noisy[0] >= n_min and noisy[1] >= n_min)   # noised class counts
+        else:
+            _both_clear = bool(is_pos.sum() >= n_min and (~is_pos).sum() >= n_min)
+        if class_conditional and _both_clear:
             # CLASS-CONDITIONAL HISTOGRAMS: one block per (cohort, class), disjoint partitions
             # beneath the cohort, so a record is charged the class balance plus ONE block --
             # exactly what the pooled block cost. The pooled histogram is derived as the
@@ -432,48 +482,57 @@ def release_statistics(schema: Schema, df: pd.DataFrame, *, epsilon_total: float
     # ── conditional target table ────────────────────────────────────────────────────
     levels: list[dict] = []
     if schema.conditional:
+        n_declared = len(schema.conditional)
+        # PASS 1: a charged support count for every cell of every declared level's PUBLIC domain,
+        # and the n_min gate on the NOISED support (a noisy threshold, post-processing). The
+        # support budget is split across the DECLARED levels, a number fixed before any count is
+        # read; splitting it across the viable levels would make the noise scale depend on the
+        # very decision the count is about to make.
+        _kept: list[dict[str, tuple[int, pd.DataFrame]]] = []
+        for li, cols in enumerate(schema.conditional):
+            ck = _cell_keys(data, cols, schema)
+            _obs = {str(k): idx for k, idx in data.groupby(ck).groups.items()}
+            kept: dict[str, tuple[int, pd.DataFrame]] = {}
+            for cell in _cell_domain(schema, cols):
+                part = data.loc[_obs.get(cell, [])]
+                _sup_scale = ledger.spend(
+                    f"count[cell][L{li}][{cell}]", kind="count",
+                    epsilon=eps_counts_cells / n_declared,
+                    sensitivity=1.0, composition="parallel", partition=str(cell),
+                    group=f"published_counts_cells_L{li}")
+                _sup_noisy = len(part) + laplace_noise(rng, _sup_scale)
+                if charge_suppression:
+                    if _sup_noisy < n_min:
+                        continue
+                elif len(part) < n_min:
+                    continue
+                # the published support is the noised count, clamped at n_min: under the noisy
+                # threshold it is already there; under the exact-count gate the clamp keeps a
+                # noised support of 0 out of a stored release (one reached an NHANES release, and
+                # `generate_by_cell` allocates rows in proportion to support)
+                kept[cell] = (int(max(n_min, round(_sup_noisy))), part)
+            _kept.append(kept)
         # Split eps_cond only across levels that will ACTUALLY release a cell. Splitting across all
         # declared levels wasted the share of every level whose cells all fall below n_min — 20-40%
         # of the conditional budget on 6 of 11 datasets (shortfalls 0.199-0.350), making those
-        # releases needlessly noisy, worst on small data.
-        #
-        # Privacy argument: which cells clear n_min is exactly the data-dependent decision the
-        # SUPPRESSION query above already charges for (`spend_suppression_counts`, "the counts used
-        # to decide which cohorts/cells appear at all"). Allocating budget from that same decision
-        # reveals nothing further, so this is post-processing of an already-paid query.
-        _viable = []
-        for _li, _cols in enumerate(schema.conditional):
-            _ck = _cell_keys(data, _cols, schema)
-            if any(len(_p) >= n_min for _, _p in data.groupby(_ck)):
-                _viable.append(_li)
-        _n_viable = max(len(_viable), 1)
+        # releases needlessly noisy, worst on small data. Which levels are viable is a function of
+        # the gate decisions above, themselves post-processing of charged counts, so reading it
+        # here reveals nothing further.
+        _n_viable = max(sum(1 for kept in _kept if kept), 1)
         eps_level = eps_cond / _n_viable                  # levels overlap -> sequential
+        # PASS 2: the positive count of every released cell.
         for li, cols in enumerate(schema.conditional):
             cells = {}
-            ck = _cell_keys(data, cols, schema)
-            for cell, part in data.groupby(ck):
-                if len(part) < n_min:
-                    continue
+            for cell, (_sup, part) in _kept[li].items():
                 # The rate is NOT noised as a bounded mean. That mechanism's scale,
                 # 1/(|cell|·eps), depends on |cell| -- which under add/remove-one adjacency is
                 # itself private and differs between neighbouring datasets. Two Laplace densities
                 # with different scales have an unbounded ratio in one tail, so it is not pure
                 # eps-DP (technical report, section 4.3). Release the POSITIVE COUNT instead: a counting query of
                 # sensitivity exactly 1 at a scale that depends on nothing private. The cell
-                # size is the already-charged noised support below. The published rate is their
+                # size is the already-charged noised support above. The published rate is their
                 # ratio -- post-processing of two DP-released quantities -- with the denominator
                 # floored at the PUBLIC n_min so a small noised count cannot blow the ratio up.
-                _sup_scale = ledger.spend(
-                    f"count[cell][L{li}][{cell}]", kind="count",
-                    epsilon=eps_counts_cells / _n_viable,
-                    sensitivity=1.0, composition="parallel", partition=str(cell),
-                    group=f"published_counts_cells_L{li}")
-                # clamped at n_min, as the cohort size is: the cell is in the release only because
-                # it holds >= n_min records, so a lower published support is impossible under the
-                # release's own rule (post-processing). Unclamped, a noised support of 0 reached a
-                # stored NHANES release, and `generate_by_cell` allocates rows in proportion to
-                # support, so that cell would have received no rows at all.
-                _sup = int(max(n_min, round(len(part) + laplace_noise(rng, _sup_scale))))
                 pos_true = float((part[schema.target].astype(str).str.strip()
                                   == schema.positive).sum())
                 scale = ledger.spend(f"cond[L{li}][{cell}]", kind="count",

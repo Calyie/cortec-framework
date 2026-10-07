@@ -249,7 +249,7 @@ table; and records every query in a ledger.
 | `class_conditional` | `True` | one histogram block per (cohort, outcome) where both outcomes clear `n_min`; `False` restores a pooled block |
 | `autoconfig` | `True` | derive the hierarchy when `schema.conditional` is empty |
 | `n_records` | `1000` | how many records you intend to generate; auto-configuration sizes the table against it |
-| `charge_suppression` | `True` | charge the decision of which cohorts and cells appear; `False` is the literature-standard treatment, and the choice is recorded |
+| `charge_suppression` | `True` | decide which cohorts, class blocks and cells appear by comparing their noised, charged counts with `n_min` (a noisy threshold, so the decision is post-processing); `False` reads the exact counts, the literature-standard treatment, which the stated guarantee does not cover; the choice is recorded |
 | `seed` | `None` | tests only: a seeded release is reproducible, so its noise can be subtracted and it carries no guarantee; the audit says so |
 
 **The privacy unit.** ε protects one ROW, and on some data that is not one person. Under group
@@ -481,7 +481,7 @@ with guard():            # the same, for one block (works in notebooks too)
 ```
 
 ```
-── cortec 1.0.0 · Refused · Data Validation ────────────────────────────────────────────
+── cortec 1.0.1 · Refused · Data Validation ────────────────────────────────────────────
   refused by  DataValidationError
   reason
     column 'income' is missing from the data. NO privacy budget was spent.

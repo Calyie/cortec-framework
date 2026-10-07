@@ -25,11 +25,11 @@ The composition rules used here, and why each applies:
   * **Post-processing immunity** (Dwork & Roth 2014). Any function of a released quantity, using
     no further access to the private data, is free. Generation is entirely post-processing.
 
-A deliberate conservatism: data-dependent suppression (dropping cohorts below `n_min`) is a
-decision made by looking at private counts. We charge it explicitly through
-`spend_suppression_counts()` rather than treating cohort sizes as public, because the honest
-accounting for "which cohorts appear in the output" is not free. Callers may opt into the
-literature-standard treatment, but they must do so by name and it is recorded in the ledger.
+Which cohorts, class blocks and cells appear is itself a decision about private counts. The
+release path makes every such decision by comparing a NOISED, charged count with the public
+floor `n_min` (a noisy threshold), so the decision is post-processing of a query this ledger
+records. Callers may opt into the literature-standard treatment, which reads the exact counts,
+but they must do so by name (`charge_suppression=False`) and the choice is recorded here.
 """
 from __future__ import annotations
 
@@ -81,9 +81,11 @@ DP_CAVEATS = [
     "The guarantee covers the RELEASED STATISTICS recorded in this report. It says nothing about "
     "the generator's pretraining data, which is outside the DP boundary entirely, and nothing "
     "about whether a memorised record could surface from that corpus.",
-    "If charge_suppression=False was passed, the decision about which cohorts and cells clear "
-    "n_min was made from the private data and NOT charged. That is a data-dependent choice outside "
-    "the accounted budget. The default charges it; check charge_suppression in this report.",
+    "Which cohorts, class blocks and cells appear is decided by comparing their NOISED, charged "
+    "counts with the public floor n_min (a noisy threshold, post-processing) when "
+    "charge_suppression=True, the default. If charge_suppression=False was passed, those decisions "
+    "were made from the exact private counts and are NOT covered by the stated guarantee; check "
+    "charge_suppression in this report.",
 ]
 
 WHAT_THIS_IS = {
@@ -158,10 +160,10 @@ class PrivacyLedger:
         self.epsilon_total = float(epsilon_total)
         self.delta = 0.0
         self.max_rows_per_person = max_rows_per_person
-        # Recorded in the audit because one of the caveats points at it: an uncharged suppression
-        # decision is a data-dependent choice outside the accounted budget, and a reader cannot
-        # check a flag the report does not carry. Set by the release path; None where the concept
-        # does not apply (the hybrid has no separate suppression query).
+        # Recorded in the audit because one of the caveats points at it: True means every n_min
+        # decision was a noisy threshold on a charged count (post-processing); False means the
+        # decisions read exact private counts and are outside the stated guarantee. A reader
+        # cannot check a flag the report does not carry. None where no n_min decision is made.
         self.charge_suppression: bool | None = None
         self.queries: list[Query] = []
         self._sealed = False
@@ -203,17 +205,6 @@ class PrivacyLedger:
             )
         self.queries.append(q)
         return scale
-
-    def spend_suppression_counts(self, *, epsilon: float, group: str = "suppression",
-                                 partition: str = "__all__") -> float:
-        """Charge for the counts used to decide which cohorts/cells appear at all.
-
-        Whether a cohort is emitted depends on its private size, so the decision itself leaks.
-        Charging it is the conservative choice and it is what this tool does by default.
-        """
-        return self.spend("n_min_suppression_counts", kind="suppression", epsilon=epsilon,
-                          sensitivity=1.0, composition="parallel", partition=partition,
-                          group=group)
 
     # ── totalling ───────────────────────────────────────────────────────────────────
 
@@ -312,7 +303,7 @@ class PrivacyLedger:
             "vacuous_threshold": VACUOUS_EPSILON_PER_PERSON,
             "delta": self.delta,
             "charge_suppression": (self.charge_suppression if self.charge_suppression is not None
-                                   else "n/a — this path has no separate suppression query"),
+                                   else "n/a — this path makes no n_min decision"),
             "within_budget": self.total_epsilon <= self.epsilon_total + 1e-9,
             "n_queries": len(self.queries),
             "groups": by_group,

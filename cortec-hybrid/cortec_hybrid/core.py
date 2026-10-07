@@ -280,6 +280,7 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
                 f"acknowledge_vacuous_privacy_unit=True to proceed with a ROW-level guarantee and "
                 f"have the acknowledgement recorded.")
     led = PrivacyLedger(epsilon, max_rows_per_person=max_rows_per_person)
+    led.charge_suppression = True   # every n_min gate reads a noised, charged count
 
     keys = _cell_keys(data, columns, schema)
     cells: dict[str, float] = {}
@@ -292,9 +293,11 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
     # to both its rate and its count, so the two compose sequentially.
     eps_counts = 0.05 * epsilon
     eps_rates = epsilon - eps_counts
-    for cell, part in data.groupby(keys):
-        if len(part) < n_min:
-            continue
+    _obs = {str(k): idx for k, idx in data.groupby(keys).groups.items()}
+    for cell in _cell_domain(schema, columns):
+        # every cell of the PUBLIC domain is queried, present in the data or not; which cells
+        # enter the table is decided below from the noised support (post-processing)
+        part = data.loc[_obs.get(cell, [])]
         # Same correction as cortec's release.py (technical report, section 4.3): a bounded-mean rate noised at
         # scale 1/(|cell|·eps) has a data-dependent scale under add/remove-one adjacency and is
         # not pure eps-DP. Release the positive COUNT (sensitivity exactly 1) and divide by the
@@ -303,10 +306,11 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
         c_scale = led.spend(f"count[{cell}]", kind="count", epsilon=eps_counts,
                             sensitivity=1.0, composition="parallel",
                             partition=str(cell), group="published_counts")
-        # clamped at n_min, as cortec's cohort sizes and cell supports are: the cell is in the
-        # table only because it holds >= n_min records, so a lower published support is
-        # impossible under the table's own rule (post-processing of the noised count)
-        support[str(cell)] = int(max(n_min, round(len(part) + laplace_noise(rng, c_scale))))
+        _sup_noisy = len(part) + laplace_noise(rng, c_scale)
+        if _sup_noisy < n_min:
+            continue            # noisy threshold on the charged count: post-processing
+        # the published support is that noised count; it is at least n_min by the gate
+        support[str(cell)] = int(max(n_min, round(_sup_noisy)))
         pos_true = float((part[schema.target].astype(str).str.strip() == schema.positive).sum())
         scale = led.spend(f"cond[{cell}]", kind="count", epsilon=eps_rates,
                           sensitivity=1.0, composition="parallel",
@@ -322,6 +326,22 @@ def release_conditional_table(schema: Schema, df: pd.DataFrame, columns: tuple[s
     led.assert_within_budget()
     led.seal()
     return ConditionalTable(tuple(columns), cells, support, epsilon, led.audit_report())
+
+
+def _cell_domain(schema: Schema, cols: tuple[str, ...]) -> list[str]:
+    """Every cell key the conditioning columns can produce under the public domains, sorted."""
+    import itertools
+    parts = []
+    for c in cols:
+        if c in schema.numerical:
+            edges = schema.bin_edges(c)
+            parts.append([f"{c}[{edges[i]:g},{edges[i+1]:g})" for i in range(len(edges) - 1)])
+        else:
+            cmap = (getattr(schema, "coarsen", None) or {}).get(c) or {}
+            vals = sorted({str(cmap.get(str(v).strip(), str(v).strip()))
+                           for v in schema.categorical[c]})
+            parts.append([c + "=" + v for v in vals])
+    return sorted(" & ".join(t) for t in itertools.product(*parts))
 
 
 def _cell_keys(df: pd.DataFrame, cols: tuple[str, ...], schema: Schema) -> pd.Series:

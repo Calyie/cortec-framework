@@ -286,10 +286,19 @@ trail. `release.audit` records every query with its epsilon, sensitivity, compos
 partition key, the per-group totals, and the composition rules applied. `cortec/accounting.py` is
 written to be read end to end by someone auditing it, independently of the rest of the package.
 
-One deliberate conservatism: suppressing cohorts below `n_min` is a decision made by looking at
-private counts, so by default the package charges for it rather than treating cohort sizes as
-public. Pass `charge_suppression=False` for the literature-standard treatment; the choice is
-recorded. Auto-configuration ranks conditioning columns by mutual information and has no concept of
+Which cohorts, class blocks and cells appear is decided by a noisy threshold: every count that
+gates a release is itself a charged, noised count, and the comparison with the public floor
+`n_min` is post-processing of it. The release queries every cohort and every cell of the public
+domains, present in the data or not, so the set of queried groups is a function of the schema
+alone. Versions before 1.0.1 charged a separate `suppression` entry while the decision still read
+the exact count; a deterministic function of private data is not made private by paying for it,
+and that entry's share now strengthens the count queries instead (about 10% of the available
+budget at the defaults, against 5% before). The price is that a group near the floor can fall on
+either side of it: a group of true size `n >= n_min` is dropped with probability
+`0.5 * exp(-(n - n_min) / b)`, where `b` is the count's Laplace scale, and a group below the floor
+is released with the mirror-image probability. Pass `charge_suppression=False` to read the exact
+counts, the treatment of the marginal-synthesis literature; the stated guarantee does not cover
+those decisions and the audit records the choice. Auto-configuration ranks conditioning columns by mutual information and has no concept of
 a person, so it can select a column that is itself a proxy for how many rows someone contributes:
 on the hospital dataset of the README's privacy-unit example it chose `number_inpatient`,
 correlation 0.733 with encounter count. That does not change ε, but it means the release is
