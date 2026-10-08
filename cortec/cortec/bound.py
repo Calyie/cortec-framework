@@ -51,11 +51,12 @@ from .release import Release, _cell_keys
 from .schema import Schema
 
 __all__ = ["transmission_bound", "bound_with_controls", "BoundResult", "BoundReport",
-           "CellBound", "BoundError", "MIN_SYNTH_ROWS_PER_CELL"]
+           "CellBound", "BoundError", "MIN_SYNTH_ROWS_PER_CELL", "TOLERANCE_RULE", "derive_tolerance"]
 
 # Below this many synthetic rows in a cell, q_c is too coarse to mean much (with one row it can
 # only be 0 or 1). Such cells are reported, not silently trusted.
 MIN_SYNTH_ROWS_PER_CELL = 20
+TOLERANCE_RULE = ("derived from the release: the Laplace half-width plus half the largest gap between a released cell rate and the released base rate, so the permuted floor cannot pass at any sample size; reads released quantities only")
 
 
 class BoundError(RuntimeError):
@@ -190,6 +191,8 @@ class BoundReport:
     dp_claim: dict
     accounting: dict
     meta: dict
+    verdict_reason: str | None = None          # why no verdict was issued, when none was
+    tolerance_rule: dict | None = None         # how the tolerance was set: derived from the release, or explicit
 
     def to_dict(self) -> dict:
         return {"_what_this_is": dict(WHAT_THIS_IS),
@@ -198,7 +201,9 @@ class BoundReport:
                 "permuted-target [FLOOR]": self.floor.to_dict(),
                 "_discriminating": bool(self.discriminating),
                 "_tolerance": self.tolerance,
+                "_tolerance_rule": self.tolerance_rule,
                 "_verdict": self.verdict,
+                "_verdict_reason": self.verdict_reason,
                 "_dp_claim": dict(self.dp_claim),
                 "_dp_caveats": list(DP_CAVEATS),
                 "_standards": dict(STANDARDS_ALIGNED),
@@ -333,13 +338,37 @@ def transmission_bound(schema: Schema, release: Release, private_df: pd.DataFram
                   epsilon_cert=epsilon_cert, alpha=alpha, n_min=int(release.n_min))
 
 
+def derive_tolerance(release: Release, lv: dict, eff: Schema, *, epsilon_cert: float,
+                     alpha: float) -> tuple[float, dict]:
+    """The shipped tolerance, from released quantities only (post-processing, no budget)."""
+    rates = [float(c["rate"]) for c in lv["cells"].values()]
+    k = max(len(rates), 1)
+    n_min = int(release.n_min)
+    sizes = [float(c["cohort_size"]) for c in release.cohorts]
+    base = (sum(float(c["cohort_size"]) * float(c["class_balance"][eff.positive]) for c in release.cohorts)
+            / max(sum(sizes), 1.0))
+    hw = (1.0 / n_min) / epsilon_cert * math.log(k / alpha)
+    spread = max((abs(r - base) for r in rates), default=0.0)
+    tol = hw + 0.5 * spread
+    return tol, {"rule": TOLERANCE_RULE, "halfwidth": round(hw, 4), "largest_released_gap": round(spread, 4),
+                 "released_base_rate": round(base, 4), "tolerance": round(tol, 4),
+                 "floor_limit_at_large_n": round(hw + spread, 4)}
+
+
 def bound_with_controls(schema: Schema, release: Release, private_df: pd.DataFrame,
                         synthetic_df: pd.DataFrame, holdout_df: pd.DataFrame, *,
-                        epsilon_cert: float, alpha: float = 0.05, tolerance: float = 0.15,
+                        epsilon_cert: float, alpha: float = 0.05, tolerance: float | str = "auto",
                         level: int | None = None, max_rows_per_person: int | None = None,
                         seed: int = 0) -> BoundReport:
     """Stage C with its floor and ceiling. Spends `epsilon_cert` once, on `private_df`.
 
+    `tolerance` is "auto" by default: the half-width plus half the largest gap between a released
+    cell rate and the released base rate, read from the release alone (post-processing), so that
+    the permuted floor cannot pass at any sample size. The earlier fixed default of 0.15 was chosen
+    by repetition on research data, which a shipped rule must not be. Pass a number to override.
+    No verdict is issued while any released cell holds fewer than MIN_SYNTH_ROWS_PER_CELL
+    synthetic rows: such a rate moves by a third on three rows and the bound carries no sampling
+    term for it.
     `holdout_df` must be real data that was NOT used to build the release, so that the ceiling is a
     genuine real sample rather than the training set compared against its own subset. `seed`
     controls only which hold-out rows form the ceiling and how the floor is permuted; it never
@@ -358,6 +387,12 @@ def bound_with_controls(schema: Schema, release: Release, private_df: pd.DataFra
     floor_df = ceiling_df.copy()
     floor_df[eff.target] = rng.permutation(floor_df[eff.target].values)
 
+    if isinstance(tolerance, str):
+        if tolerance.lower() != "auto":
+            raise BoundError(f"tolerance must be 'auto' or a number, got {tolerance!r}")
+        tolerance, tolerance_rule = derive_tolerance(release, lv, eff, epsilon_cert=epsilon_cert, alpha=alpha)
+    else:
+        tolerance, tolerance_rule = float(tolerance), {"rule": "explicit", "tolerance": float(tolerance)}
     kw = dict(epsilon_cert=epsilon_cert, alpha=alpha, n_min=n_min)
     synth = _score("synthetic", lv, cols, cells, eff, p_hat, n_priv, synthetic_df, **kw)
     ceil = _score("real-sample [CEILING]", lv, cols, cells, eff, p_hat, n_priv, ceiling_df, **kw)
@@ -365,7 +400,14 @@ def bound_with_controls(schema: Schema, release: Release, private_df: pd.DataFra
     for r in (synth, ceil, floor):
         r.within_bound = bool(r.worst_case_bound <= tolerance)
     discriminating = bool(ceil.within_bound and not floor.within_bound)
-    verdict = None if not discriminating else ("within bound" if synth.within_bound else "outside tolerance")
+    if synth.n_cells_thin > 0:
+        verdict, reason = None, (f"{synth.n_cells_thin} of {synth.n_cells} released cells hold fewer than "
+                                 f"{MIN_SYNTH_ROWS_PER_CELL} synthetic rows; no verdict is issued")
+    elif not discriminating:
+        verdict, reason = None, ("the controls did not discriminate (the real-sample ceiling failed or the "
+                                 "permuted floor cleared); no verdict is issued")
+    else:
+        verdict, reason = ("within bound" if synth.within_bound else "outside tolerance"), None
 
     # ── the DP claim block: the release's spend plus this one, per row and per person ──────
     audit = release.audit or {}
@@ -386,11 +428,12 @@ def bound_with_controls(schema: Schema, release: Release, private_df: pd.DataFra
                      "per_person_claim_permitted": bool(eps_person <= VACUOUS_EPSILON_PER_PERSON),
                      "vacuous_threshold": VACUOUS_EPSILON_PER_PERSON})
     meta = {"level": int(lv["level"]), "columns": list(cols), "n_min": n_min, "alpha": alpha,
-            "tolerance": tolerance, "seed_for_controls_only": seed,
+            "tolerance": tolerance, "tolerance_rule": tolerance_rule, "seed_for_controls_only": seed,
             "n_synthetic_rows": int(len(synthetic_df)), "n_holdout_rows": int(len(holdout_df)),
             "noise_source": "cryptographically secure, unseeded: this bound is ONE draw and "
                             "re-running will not reproduce it",
             "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     return BoundReport(synthetic=synth, ceiling=ceil, floor=floor, tolerance=tolerance,
                        discriminating=discriminating, verdict=verdict, dp_claim=dp_claim,
-                       accounting=ledger.audit_report(), meta=meta)
+                       accounting=ledger.audit_report(), meta=meta,
+                       verdict_reason=reason, tolerance_rule=tolerance_rule)

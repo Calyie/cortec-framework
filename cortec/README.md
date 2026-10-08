@@ -395,7 +395,7 @@ least `1 − alpha`. It is a utility bound computed under DP, and it is not a pr
 from cortec import bound_with_controls
 
 report = bound_with_controls(schema, release, private_df, synthetic, holdout_df,
-                             epsilon_cert=1.0, alpha=0.05, tolerance=0.15)
+                             epsilon_cert=1.0, alpha=0.05)          # tolerance derived from the release
 print(report.summary())
 report.to_json("bound.json")       # readable by a third party without the private data
 ```
@@ -481,7 +481,7 @@ with guard():            # the same, for one block (works in notebooks too)
 ```
 
 ```
-── cortec 1.0.1 · Refused · Data Validation ────────────────────────────────────────────
+── cortec 1.0.0 · Refused · Data Validation ────────────────────────────────────────────
   refused by  DataValidationError
   reason
     column 'income' is missing from the data. NO privacy budget was spent.
@@ -546,7 +546,7 @@ a first run meets in Stage C and the evaluation:
 
 | Term | Meaning |
 |---|---|
-| tolerance | the largest per-cell gap you accept (0.15 by default); a table is within tolerance when its worst bound is at or below it |
+| tolerance | the largest per-cell gap you accept; by default derived from the release (the noise half-width plus half the largest gap between a released cell rate and the released base rate, so the permuted floor cannot pass at any sample size), or a number you pass; a table is within tolerance when its worst bound is at or below it |
 | ceiling | a real sample of the synthetic table's size, scored the same way: the best any method can do at that size |
 | floor | the same real sample with its target permuted: data with no conditional signal |
 | discriminating | the test had power: the ceiling is within tolerance and the floor is not; otherwise the verdict on the synthetic table is not reported |

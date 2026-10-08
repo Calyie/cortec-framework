@@ -88,7 +88,8 @@ def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
     ap.add_argument("--n-min", type=int, default=150, help="cohorts and cells below this size are suppressed")
     ap.add_argument("--max-rows-per-person", type=int, default=1, help="the privacy unit (default 1)")
     ap.add_argument("--epsilon-cert", type=float, default=1.0, help="the Stage C budget (default 1.0)")
-    ap.add_argument("--tolerance", type=float, default=0.15, help="the Stage C tolerance (default 0.15)")
+    ap.add_argument("--tolerance", default="auto",
+                    help="the Stage C tolerance: 'auto' (default) derives it from the release, or a number")
     ap.add_argument("--out", default=None, help="output folder; default results/<schema name>_<backend>")
     ap.add_argument("--no-evaluate", action="store_true", help="skip the evaluation (needs scikit-learn)")
     ap.add_argument("--exports", choices=("json", "all"), default="json",
@@ -158,7 +159,8 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
 
     # ---- Stage C: a DP bound on the private-vs-synthetic conditional gap, with its own controls ----
     report = bound_with_controls(schema, release, train, synthetic, holdout,
-                                 epsilon_cert=a.epsilon_cert, alpha=0.05, tolerance=a.tolerance)
+                                 epsilon_cert=a.epsilon_cert, alpha=0.05,
+                                 tolerance=a.tolerance if str(a.tolerance).lower() == "auto" else float(a.tolerance))
     rec_c = show(report, schema=schema.name)
     files_c = save_record(rec_c, out, "stage_c_bound", a.exports)
     report.to_json(os.path.join(out, "bound.json"))

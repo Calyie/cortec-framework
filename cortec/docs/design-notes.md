@@ -290,7 +290,7 @@ Which cohorts, class blocks and cells appear is decided by a noisy threshold: ev
 gates a release is itself a charged, noised count, and the comparison with the public floor
 `n_min` is post-processing of it. The release queries every cohort and every cell of the public
 domains, present in the data or not, so the set of queried groups is a function of the schema
-alone. Versions before 1.0.1 charged a separate `suppression` entry while the decision still read
+alone. An earlier build charged a separate `suppression` entry while the decision still read
 the exact count; a deterministic function of private data is not made private by paying for it,
 and that entry's share now strengthens the count queries instead (about 10% of the available
 budget at the defaults, against 5% before). The price is that a group near the floor can fall on

@@ -693,15 +693,16 @@ def record_bound(report, *, schema: str = "") -> RunRecord:
               ("epsilon for the bound", c.get("epsilon_transmission_bound")),
               ("alpha", report.synthetic.alpha), ("tolerance", report.tolerance),
               ("discriminating", report.discriminating)]
-    if report.discriminating:
-        verdict = (f"synthetic data is {report.verdict} at tolerance {report.tolerance} with "
+    if report.verdict is not None:
+        verdict = (f"synthetic data is {report.verdict} at tolerance {round(report.tolerance, 4)} with "
                    f"simultaneous confidence {1 - report.synthetic.alpha:.0%} over "
                    f"{report.synthetic.n_cells} released cells")
         role = "ok" if report.verdict == "within bound" else "refusal"
     else:
-        verdict = ("no verdict: the test did not discriminate. A bound is meaningful only when the "
-                   "real-sample ceiling clears the tolerance and the permuted-target floor does not. "
-                   "Adjust the tolerance or epsilon_cert; do not report the synthetic result from this run.")
+        _why = getattr(report, "verdict_reason", None) or "the test did not discriminate"
+        verdict = (f"no verdict: {_why}. A bound is meaningful only when every released cell holds "
+                   "enough synthetic rows, the real-sample ceiling clears the tolerance and the "
+                   "permuted-target floor does not; do not read the synthetic row as a pass or a fail.")
         role = "warning"
     warnings = []
     if c.get("epsilon_per_person_vacuous"):

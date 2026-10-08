@@ -57,6 +57,7 @@ the paper's convention, and integers with a thousands separator.
 | Stage A | `privacy accounting` | group, queries, partitions, epsilon |
 | Stage B | `reasoning evidence` | measure, count |
 | Stage C | `bound per condition` | condition, cells, covered, uncovered, thin, mean bound, worst bound, within tolerance; rows 1 and 2 are the real-sample ceiling and the permuted-target floor |
+| Stage C | the verdict line | `within bound`, `outside tolerance`, or `no verdict` with its reason: a released cell below 20 synthetic rows, or controls that did not discriminate; the record's values carry the tolerance and `tolerance rule` (derived from the release, or explicit) |
 | Evaluation | `fidelity and utility` | table, rows, 1-way TV, TSTR-LR, TSTR-RF, TSTR-GBM, absent categories; the last two rows are the real sample and the permuted floor |
 | Correction | `released conditional table` | cell, rate, support |
 

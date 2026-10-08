@@ -131,3 +131,40 @@ def test_private_data_that_does_not_match_the_release_is_refused_before_spending
     wrong = private.copy(); wrong["grp"] = "b"
     with pytest.raises(BoundError, match="does not match the release"):
         transmission_bound(schema, rel, wrong, _data(500, 23), epsilon_cert=EPS_CERT)
+
+
+def test_the_default_tolerance_is_derived_from_the_release_and_not_from_private_data(world):
+    """The earlier fixed 0.15 was chosen by repetition on research data. The shipped rule reads the
+    release alone: half-width plus half the largest gap between a released cell rate and the released
+    base rate, so the permuted floor's large-n limit (gap plus half-width) always exceeds it."""
+    import math
+    from cortec.bound import derive_tolerance
+    schema, private, holdout, rel = world
+    rep = bound_with_controls(schema, rel, private, _data(2000, 11), holdout, epsilon_cert=EPS_CERT)
+    rule = rep.tolerance_rule
+    assert rule["rule"].startswith("derived from the release")
+    lv = rel.conditional_levels[-1]
+    rates = [c["rate"] for c in lv["cells"].values()]
+    base = sum(c["cohort_size"] * c["class_balance"]["YES"] for c in rel.cohorts) / sum(c["cohort_size"] for c in rel.cohorts)
+    hw = (1.0 / rel.n_min) / EPS_CERT * math.log(len(rates) / 0.05)
+    expected = hw + 0.5 * max(abs(r - base) for r in rates)
+    assert rep.tolerance == pytest.approx(expected)
+    assert rule["floor_limit_at_large_n"] > rep.tolerance, "the floor's limit must sit above the tolerance"
+    explicit = bound_with_controls(schema, rel, private, _data(2000, 11), holdout, epsilon_cert=EPS_CERT, tolerance=0.15)
+    assert explicit.tolerance == 0.15 and explicit.tolerance_rule["rule"] == "explicit"
+
+
+def test_no_verdict_is_issued_while_a_released_cell_is_thin(world):
+    """A cell rate over nine rows moves by a third on three rows and the bound has no sampling term
+    for it, so a verdict decided by such a cell is a property of a handful of rows."""
+    schema, private, holdout, rel = world
+    syn = _data(2000, 13)
+    thin = pd.concat([syn[syn["grp"] != "c"], syn[syn["grp"] == "c"].head(MIN_SYNTH_ROWS_PER_CELL - 1)], ignore_index=True)
+    rep = bound_with_controls(schema, rel, private, thin, holdout, epsilon_cert=EPS_CERT)
+    assert rep.synthetic.n_cells_thin >= 1
+    assert rep.verdict is None and "fewer than" in rep.verdict_reason
+    d = rep.to_dict()
+    assert d["_verdict"] is None and d["_verdict_reason"] == rep.verdict_reason
+    full = bound_with_controls(schema, rel, private, syn, holdout, epsilon_cert=EPS_CERT)
+    assert full.synthetic.n_cells_thin == 0
+    assert full.verdict in ("within bound", "outside tolerance") or full.verdict_reason.startswith("the controls did not")

@@ -137,7 +137,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     assert page.count("\n") < 60                                 # one screen, not a reference dump
     assert help_main(["bound_with_controls"]) == 0
     one = capsys.readouterr().out                               # arguments read from the code
-    assert "Help · bound_with_controls" in one and "tolerance" in one and "default 0.15" in one
+    assert "Help · bound_with_controls" in one and "tolerance" in one and "auto" in one   # the tolerance is derived from the release by default
     assert help_main(["Generator.generate"]) == 0 and help_main(["nope"]) == 2
     with pytest.raises(SystemExit) as e:                        # `cortec run --help` is argparse's
         help_main(["run", "--help"])

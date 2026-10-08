@@ -129,8 +129,11 @@ TERMS_CORTEC = [
                                    "between it and the synthetic rate. The bounds hold over every "
                                    "cell at once with probability 1 - alpha. It bounds utility; it "
                                    "is not a privacy audit"),
-    ("tolerance", "the largest per-cell gap you accept (0.15 by default). A table is within "
-                  "tolerance when its worst bound is at or below it"),
+    ("tolerance", "the largest per-cell gap you accept. By default it is derived from the release: the "
+                  "noise half-width plus half the largest gap between a released cell rate and the released "
+                  "base rate, so the permuted floor cannot pass at any sample size; pass a number to "
+                  "override. A table is within tolerance when its worst bound is at or below it. No "
+                  "verdict is issued while a released cell holds fewer than 20 synthetic rows"),
     ("alpha", "the bound holds over every cell with probability at least 1 - alpha; 0.05 gives "
               "95% simultaneous confidence"),
     ("ceiling", "a real sample of the same size as the synthetic table, scored the same way: the "
