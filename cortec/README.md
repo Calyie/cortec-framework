@@ -56,15 +56,18 @@ The enterprise surfaces have their own extras: `bedrock` (adds request signing f
 and `vertex`. Install `'./cortec[dev]'` as well to run the tests:
 
 ```bash
-python3 -m pytest cortec/tests -q     # 151 tests, offline, each named after the defect it prevents
+python3 -m pytest cortec/tests -q     # 159 tests, offline, each named after the defect it prevents
 ```
 
 **Run it.** Installing the package puts the `cortec` command on PATH. `cortec run` runs the
 whole pipeline on your own table from any directory: Stage A (the release), Stage B
 (generation), Stage C (the bound) and the evaluation, printing each in the standard layout and
-writing every file under one folder that it names at the end. It needs two inputs: the private
-table as a CSV with one row per person (step 3), and a Python file that declares the schema from
-public facts only (step 4), for example:
+writing every file under one folder that it names at the end. The run opens with a banner of
+what is about to run and closes with a results panel: the marginal fidelity result and the
+downstream utility result placed against the range real samples of the same size span on the
+same holdout, the Stage C verdict, the privacy spent and the cost, on one screen and in
+`RESULTS.md`. It needs two inputs: the private table as a CSV with one row per person (step 3),
+and a Python file that declares the schema from public facts only (step 4), for example:
 
 ```python
 # my_schema.py
@@ -95,9 +98,10 @@ cortec run --help
 
 Without `--holdout`, one fifth of the data is set aside before Stage A for the Stage C ceiling
 and the evaluation. The output folder (default `results/<schema name>_<backend>`) holds
-`synthetic.csv`, `release.json` (reused by later runs into the same folder, because a release is
-made once), `bound.json`, and one JSON record per stage; `--exports all` also writes each
-record's Markdown, CSV and figure, which `RunRecord.from_json` can produce later from the JSON. The
+`RESULTS.md` (the results panel), `synthetic.csv`, `release.json` (reused by later runs into the
+same folder, because a release is made once), `bound.json`, and one JSON record per stage and
+for the panel; `--exports all` also writes each record's Markdown, CSV and figure, which
+`RunRecord.from_json` can produce later from the JSON. The
 sections below explain each stage and every setting; the same calls are available from Python
 for your own scripts, and `cortec-hybrid run` is the correction. `python3 run_cortec.py`, in
 this directory, is the same command for a clone whose scripts directory is not on PATH.
@@ -138,6 +142,13 @@ same on both; the surface changes only the client and the credentials.
 | `gemini` | Gemini on Google Vertex AI (recommended) | Application Default Credentials, `GOOGLE_CLOUD_PROJECT`, optionally `GOOGLE_CLOUD_LOCATION` (default `global`) | `surface="vertex"` |
 | `ollama` | a local Ollama server | `ollama_url` (default `http://localhost:11434`) | **not an enterprise surface — out of deployment scope**; the capability gate refuses these models by default |
 | `mock` | none | nothing | offline dry runs of the whole pipeline |
+
+A reasoning model served through Ollama, for example OpenAI's open-weight `gpt-oss:120b` standing in
+for a model an institution hosts itself, needs three settings that `cortec run` exposes: `--effort`
+(`low`, `medium` or `high`) for its thinking level, `--max-output-tokens` large enough that the chain
+of thought never consumes the whole budget before the CSV is written (32,768 at the low level), and
+`--request-timeout` of several minutes per call. The capability gate has not measured that model, so
+`--allow-unvalidated` is required and the output says so.
 
 **Which endpoint to point this at.** For regulated data, use the enterprise-hosted, tenant-isolated
 surface in your own cloud account (Bedrock, Azure OpenAI or Vertex AI), with private networking,
@@ -312,6 +323,7 @@ synthetic = gen.generate_selected(release, n_rows=5000, pool_factor=3)
 | `reasoning` | `"on"` | `"suppressed"` is measured to be 3.8× worse on conditional error; the tool warns if you choose it |
 | `rows_per_call` | `25` | rows requested per model call |
 | `quota` | `True` | give every batch the exact per-bin, per-category and per-outcome counts it owes |
+| `quota_by_class` | `True` | state those counts per outcome, so each class's marginals are enforced rather than read from the class blocks; `False` states the totals only, as the earlier releases' prompt did |
 | `budget_usd` | `None` | a spend cap from the vendor's reported token counts at list prices; the run stops when it is reached and keeps what it has |
 | `request_timeout`, `max_retries` | `120.0`, `3` | the per-call timeout in seconds, and the retries per batch |
 | `allow_unvalidated` | `False` | run a model not in the measured set; verify transmission on your own data first |
@@ -432,11 +444,25 @@ categories absent from each table. It needs scikit-learn, the `dev` extra.
 
 ```python
 from cortec import evaluate
+from cortec.report import record_results
 
 rec = evaluate(schema, {"cortec": synthetic}, train=private_df, holdout=holdout_df)
 rec.show()                      # the paper's head-to-head table layout, reference rows marked
 rec.save("results", "evaluation")
+panel = record_results(evaluation=rec, bound=rec_c, generation=rec_b, release=rec_a)
+panel.show()                    # fidelity and utility against the real-sample range, the bound, the cost
+panel.write_markdown("results/RESULTS.md")
 ```
+
+`evaluate()` draws five real samples by default (`reference_draws`), each with a permuted copy;
+the two reference rows are their means, and a second table, `reference spread`, gives the lowest
+and highest value of each measure over them. That range is what real data of this size spans on
+this holdout. `record_results()` turns the stage records into the results panel `cortec run`
+prints last: the marginal fidelity result and the downstream utility result, each synthetic
+number read against that range (within it, beyond every real sample, or outside it by how much),
+and each student's share of real-sample utility, (synthetic − permuted) / (real sample −
+permuted), beside its gap. The panel's headline is a reading at one draw, not a pass or a fail;
+nothing in the package compares a number with a threshold.
 
 **What to expect.** On UCI Adult at n = 300, models trained on this package's output were
 statistically indistinguishable from models trained on a real sample of the same size, with
@@ -481,7 +507,7 @@ with guard():            # the same, for one block (works in notebooks too)
 ```
 
 ```
-── cortec 1.0.0 · Refused · Data Validation ────────────────────────────────────────────
+── CoRTeC 1.0.0 · Refused · Data Validation ────────────────────────────────────────────
   refused by  DataValidationError
   reason
     column 'income' is missing from the data. NO privacy budget was spent.
@@ -516,7 +542,9 @@ exception is a fault and keeps its traceback.
 ## 11. Output and exports
 
 Every stage prints one layout and exports one record, through `cortec.report`. The layout is a
-stage header, a block of named values, one or more tables, the warnings, and a verdict. On a
+stage header, a block of named values, one or more tables (each with the question it answers
+under its name), the warnings, and a verdict; a run opens with a banner of what is about to run
+and closes with the results panel and a block listing every file written. On a
 terminal the numbers the run produced are printed in blue, reference rows (a real sample, a
 permuted floor) in grey, warnings in amber, and a verdict against the output or a refusal in
 orange. Colour is used only on a terminal; `NO_COLOR` or `CORTEC_COLOR=0` turns it off and
@@ -556,6 +584,9 @@ a first run meets in Stage C and the evaluation:
 | TSTR-LR, RF, GBM | train on synthetic, test on real: three classifiers trained on the table, scored by AUC on the holdout; higher is better, read against the ceiling and floor rows |
 | yield | rows kept divided by rows requested from the model; rows outside the schema are dropped and counted |
 | support | the number of private records in a cell or cohort, with noise added |
+| reference spread | the lowest and highest value of each measure over the real samples drawn as references: the range real data of this size spans on this holdout |
+| reading | where a synthetic number lies against that range: within it, beyond every real sample, or outside it by how much |
+| share of real-sample utility | (synthetic − permuted) / (real sample − permuted) for one student: the part of a real sample's utility above the no-information floor that the synthetic table reaches |
 
 ## Licence
 

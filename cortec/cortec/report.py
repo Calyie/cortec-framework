@@ -84,7 +84,12 @@ def paint(text: str, role: str | None = None, *, bold: bool = False,
     on = colour_enabled() if enabled is None else enabled
     if not on or (role is None and not bold):
         return text
-    codes = ("\x1b[1m" if bold else "") + (_ansi_fg(ROLE_HEX[role]) if role else "")
+    # titles and keys take the terminal's own text colour (bold for a title), so they read on a
+    # light and on a dark background alike; the ink hex values are for the figures
+    fg = _ansi_fg(ROLE_HEX[role]) if role and role not in ("title", "key") else ""
+    codes = ("\x1b[1m" if bold else "") + fg
+    if not codes:
+        return text
     return f"{codes}{text}\x1b[0m"
 
 
@@ -96,6 +101,11 @@ def strip_colour(text: str) -> str:
 
 
 # ── formatting ────────────────────────────────────────────────────────────────────────
+def wrap(text: str, width: int = WIDTH - 2) -> list[str]:
+    """Wrap a sentence to the page width without splitting a path, a number or a long token."""
+    return textwrap.wrap(str(text), width, break_long_words=False, break_on_hyphens=False) or [""]
+
+
 def fmt(v, decimals: int = 3) -> str:
     """One number format for every table and value block: booleans as yes/no, integers with a
     thousands separator, floats to `decimals` places (the paper reports three), missing as n/a."""
@@ -132,12 +142,21 @@ def _plain(v):
 
 
 # ── blocks ────────────────────────────────────────────────────────────────────────────
+# The method is written CoRTeC wherever it is named; `cortec` is the command and the package.
+DISPLAY_NAME = {"cortec": "CoRTeC", "cortec-hybrid": "CoRTeC-hybrid"}
+
+
+def display_name(tool: str) -> str:
+    """The name printed for a tool identifier: `cortec` is shown as CoRTeC."""
+    return DISPLAY_NAME.get(tool, tool)
+
+
 def header(stage: str, title: str, *, tool: str = "cortec", version: str | None = None,
            enabled: bool | None = None) -> str:
-    """The rule that opens every stage: `── cortec 1.0.0 · Stage A · Release ────`."""
+    """The rule that opens every stage: `── CoRTeC 1.0.0 · Stage A · Release ────`."""
     if version is None:
         version = _package_version(tool)
-    left = f"── {tool} {version} · {stage} · {title} "
+    left = f"── {display_name(tool)} {version} · {stage} · {title} "
     return paint(left + "─" * max(0, WIDTH - len(left)), "title", bold=True, enabled=enabled)
 
 
@@ -161,12 +180,18 @@ def kv_block(pairs, *, indent: int = 2, decimals: int = 3, enabled: bool | None 
     lines = []
     for k, v in pairs:
         role = "result" if _is_number(v) or isinstance(v, (bool, np.bool_)) else None
+        text = fmt(v, decimals)
+        first, *rest = wrap(text, max(24, WIDTH - indent - w - 2))
         lines.append(" " * indent + paint(f"{k:<{w}}", "key", enabled=enabled) + "  "
-                     + paint(fmt(v, decimals), role, enabled=enabled))
+                     + paint(first, role, enabled=enabled))
+        lines.extend(" " * (indent + w + 2) + paint(r, role, enabled=enabled) for r in rest)
     return "\n".join(lines)
 
 
 def note(text: str, *, enabled: bool | None = None) -> str:
+    """A grey line; a long sentence is wrapped to the page width (an aligned line is not)."""
+    if len(text) > WIDTH - 2 and "  " not in text.strip():
+        return "\n".join(paint(f"  {w}", "reference", enabled=enabled) for w in wrap(text))
     return paint(f"  {text}", "reference", enabled=enabled)
 
 
@@ -349,6 +374,7 @@ class ResultTable:
     reference_rows: list[int] = field(default_factory=list)
     note: str | None = None
     decimals: int = 3
+    subtitle: str | None = None     # the question the table answers, printed under its name
 
     def _cells(self) -> list[list[str]]:
         return [[fmt(v, self.decimals) for v in r] for r in self.rows]
@@ -357,7 +383,9 @@ class ResultTable:
         out = []
         for j in range(len(self.columns)):
             vals = [r[j] for r in self.rows if j < len(r) and r[j] is not None]
-            out.append(bool(vals) and all(_is_number(v) or isinstance(v, (bool, np.bool_)) for v in vals))
+            out.append(bool(vals) and all(_is_number(v) or isinstance(v, (bool, np.bool_))
+                                          or (isinstance(v, str) and re.fullmatch(r"-?\d+(\.\d+)?%", v))
+                                          for v in vals))
         return out
 
     def render(self, *, enabled: bool | None = None, indent: int = 2) -> str:
@@ -372,6 +400,8 @@ class ResultTable:
                 out.append(paint(s, role, enabled=enabled))
             return pad + "  ".join(out)
         lines = [pad + paint(self.name, "title", bold=True, enabled=enabled)]
+        if self.subtitle:
+            lines.extend(note(w, enabled=enabled) for w in wrap(self.subtitle))
         lines.append(line(self.columns, ["key"] * len(self.columns)))
         lines.append(pad + paint("─" * (sum(widths) + 2 * (len(widths) - 1)), "reference", enabled=enabled))
         for i, r in enumerate(cells):
@@ -381,7 +411,7 @@ class ResultTable:
                 roles = ["result" if numeric[j] and j > 0 else None for j in range(len(r))]
             lines.append(line(r, roles))
         if self.note:
-            lines.append(note(self.note, enabled=enabled))
+            lines.extend(note(w, enabled=enabled) for w in wrap(self.note))
         return "\n".join(lines)
 
     def to_markdown(self) -> str:
@@ -392,7 +422,10 @@ class ResultTable:
         for i, r in enumerate(self._cells()):
             cells = [f"*{c}*" if i in self.reference_rows else c for c in r]
             body.append("| " + " | ".join(cells) + " |")
-        out = [f"**{self.name}**", "", head, rule] + body
+        out = [f"**{self.name}**", ""]
+        if self.subtitle:
+            out += [f"*{self.subtitle}*", ""]
+        out += [head, rule] + body
         if self.note:
             out += ["", self.note]
         return "\n".join(out)
@@ -409,13 +442,13 @@ class ResultTable:
         return {"name": self.name, "columns": list(self.columns),
                 "rows": [[_plain(v) for v in r] for r in self.rows],
                 "reference_rows": list(self.reference_rows), "note": self.note,
-                "decimals": self.decimals}
+                "decimals": self.decimals, "subtitle": self.subtitle}
 
     @classmethod
     def from_dict(cls, d: dict) -> "ResultTable":
         return cls(name=d["name"], columns=list(d["columns"]), rows=[list(r) for r in d["rows"]],
                    reference_rows=list(d.get("reference_rows", [])), note=d.get("note"),
-                   decimals=int(d.get("decimals", 3)))
+                   decimals=int(d.get("decimals", 3)), subtitle=d.get("subtitle"))
 
 
 # ── the record ────────────────────────────────────────────────────────────────────────
@@ -473,10 +506,12 @@ class RunRecord:
         if self.verdict:
             parts.append("")
             role = {"ok": "ok", "refusal": "refusal", "warning": "warning"}[self.verdict_role]
-            parts.append(paint(f"  {self.verdict}", role, bold=True, enabled=enabled))
+            parts.extend(paint(f"  {w}", role, bold=True, enabled=enabled)
+                         for w in wrap(self.verdict))
         if self.notes:
             parts.append("")
-            parts.extend(note(n, enabled=enabled) for n in self.notes)
+            for n in self.notes:
+                parts.extend(note(w, enabled=enabled) for w in wrap(n))
         return "\n".join(parts)
 
     def show(self) -> None:
@@ -519,10 +554,10 @@ class RunRecord:
             return cls.from_dict(json.load(f))
 
     def to_markdown(self) -> str:
-        out = [f"## {self.tool} {self.version}: {self.stage}, {self.title}", "",
+        out = [f"## {display_name(self.tool)} {self.version}: {self.stage}, {self.title}", "",
                f"Schema `{self.schema}`, recorded {self.created}.", ""]
         if self.values:
-            out += ["| value | |", "|---|---:|"]
+            out += ["| quantity | value |", "|---|---:|"]
             out += [f"| {k} | {fmt(v)} |" for k, v in self.values]
             out.append("")
         for t in self.tables:
@@ -577,6 +612,226 @@ class RunRecord:
         self.write_markdown(files["markdown"])
         self.to_json(files["json"])
         return files
+
+
+# ── the run as a whole ────────────────────────────────────────────────────────────────
+def fmt_seconds(s) -> str:
+    """A duration in words: `12 s`, `1 min 05 s`, `2 h 03 min`."""
+    if s is None:
+        return "n/a"
+    s = max(0.0, float(s))
+    if s < 60:
+        return f"{s:.0f} s"
+    m, sec = divmod(int(round(s)), 60)
+    if m < 60:
+        return f"{m} min {sec:02d} s"
+    h, m = divmod(m, 60)
+    return f"{h} h {m:02d} min"
+
+
+def banner(title: str, pairs, *, tool: str = "cortec", version: str | None = None,
+           enabled: bool | None = None) -> str:
+    """The block that opens a run: a double rule naming the tool, its version and the run, then
+    the run's facts (data, backend, budget, output, stages) as named values, so a log opens with
+    what was run before any result is shown."""
+    if version is None:
+        version = _package_version(tool)
+    left = f"══ {display_name(tool)} {version} · {title} "
+    lines = [paint(left + "═" * max(0, WIDTH - len(left)), "title", bold=True, enabled=enabled)]
+    block = kv_block(pairs, enabled=enabled)
+    if block:
+        lines.append(block)
+    return "\n".join(lines)
+
+
+def files_block(directory: str, entries, *, tool: str = "cortec", version: str | None = None,
+                enabled: bool | None = None) -> str:
+    """The closing block: the folder, then one line per file or group of files, name on the
+    left and what it holds on the right. `entries` is [(name, description), ...]."""
+    lines = [header("Files", directory, tool=tool, version=version, enabled=enabled)]
+    entries = [(str(n), str(d)) for n, d in entries]
+    w = max((len(n) for n, _ in entries), default=0)
+    for name, what in entries:
+        first, *rest = wrap(what, max(20, WIDTH - w - 4))
+        lines.append("  " + paint(f"{name:<{w}}", "key", enabled=enabled) + "  " + first)
+        lines.extend(" " * (w + 4) + r for r in rest)
+    return "\n".join(lines)
+
+
+def _against_band(value, real, lo, hi, *, lower_is_better: bool, decimals: int = 3):
+    """Place one synthetic number against the real-sample references: returns (class, text),
+    the class one of within, better, worse (a band of real samples was available) or gap (one
+    real sample only), and the distance: the gap, or how far outside the band the value lies."""
+    if value is None or real is None or (isinstance(value, float) and math.isnan(value)):
+        return "none", "not scored", None
+    d = f".{decimals}f"
+    if lo is None or hi is None or hi - lo < 10 ** -decimals:
+        return "gap", f"gap {value - real:+{d}} to a real sample of the same size", value - real
+    band = f"({lo:{d}} to {hi:{d}})"
+    if lo <= value <= hi:
+        return "within", f"within the real-sample range {band}", 0.0
+    if (value < lo) if lower_is_better else (value > hi):
+        side = "below" if lower_is_better else "above"
+        return "better", f"{side} every real sample of this size {band}", (lo - value) if lower_is_better else (value - hi)
+    if lower_is_better:
+        return "worse", f"above the real-sample range by {value - hi:{d}} {band}", value - hi
+    return "worse", f"below the real-sample range by {lo - value:{d}} {band}", lo - value
+
+
+def record_results(*, evaluation: RunRecord | None = None, bound: RunRecord | None = None,
+                   generation: RunRecord | None = None, release: RunRecord | None = None,
+                   schema: str = "", seconds: float | None = None,
+                   synthetic_label: str = "synthetic") -> RunRecord:
+    """The results panel: the marginal fidelity result and the downstream utility result read against
+    a real sample of the same size and the permuted floor, the Stage C verdict, the privacy spent
+    and the cost, on one screen. It is built from the stage records, so it can be rebuilt from
+    the JSON files of an earlier run. No goal is passed or failed against a threshold: every
+    number is placed against the range real samples of the same size span on the same holdout
+    (the evaluation's `reference spread` table), or against the one real sample when the
+    evaluation drew only one."""
+    schema = schema or (evaluation.schema if evaluation else "") or (bound.schema if bound else "")
+    values, tables, notes, warnings = [], [], [], []
+    classes: list[tuple[str, str, str, float | None]] = []        # (measure, class, text, distance)
+    ev = evaluation.table("fidelity and utility") if evaluation is not None else None
+    spread = evaluation.table("reference spread") if evaluation is not None else None
+
+    def band(measure):
+        if spread is None:
+            return (None,) * 6
+        for r in spread.rows:
+            if r[0] == measure:
+                return tuple(r[1:7])
+        return (None,) * 6
+
+    if ev is not None and ev.rows:
+        col = {c: i for i, c in enumerate(ev.columns)}
+        syn = next((r for r in ev.rows if r[0] == synthetic_label), ev.rows[0])
+        real = next((r for r in ev.rows if str(r[0]).startswith("real sample")), None)
+        perm = next((r for r in ev.rows if str(r[0]).startswith("permuted")), None)
+        get = lambda row, c: (row[col[c]] if row is not None and c in col else None)   # noqa: E731
+        # marginal fidelity
+        v, r_, p_ = get(syn, "1-way TV"), get(real, "1-way TV"), get(perm, "1-way TV")
+        _, lo, hi, _, _, _ = band("1-way TV")
+        cls, text, dist = _against_band(v, r_, lo, hi, lower_is_better=True)
+        classes.append(("marginal fidelity (1-way TV)", cls, text, dist))
+        tables.append(ResultTable(
+            "marginal fidelity result",
+            ["measure", "synthetic", "real sample", "permuted", "gap"],
+            [["1-way TV (lower is better)", v, r_, p_, (v - r_) if (v is not None and r_ is not None) else None]],
+            subtitle="Does the synthetic table carry the real data's single-column distributions? Mean "
+                     "total-variation distance from the holdout over every column, on the schema's bins.",
+            note=f"reading: {text}. The permuted floor matches the real sample here because permuting "
+                 "the target leaves every marginal unchanged; the floor is informative for downstream utility."))
+        # downstream utility
+        rows = []
+        for st in ("LR", "RF", "GBM"):
+            c = f"TSTR-{st}"
+            v, r_, p_ = get(syn, c), get(real, c), get(perm, c)
+            _, lo, hi, _, _, _ = band(c)
+            cls, text, dist = _against_band(v, r_, lo, hi, lower_is_better=False)
+            classes.append((f"downstream utility ({st})", cls, text, dist))
+            gap = (v - r_) if (v is not None and r_ is not None) else None
+            share = None
+            if v is not None and r_ is not None and p_ is not None and r_ - p_ > 1e-9:
+                share = f"{100 * (v - p_) / (r_ - p_):.0f}%"
+            rows.append([st, v, r_, p_, gap, share if share is not None else "n/a"])
+        reading = "; ".join(f"{st}: {t}" for (m, c, t, _), st in zip(classes[1:], ("LR", "RF", "GBM")))
+        tables.append(ResultTable(
+            "downstream utility result",
+            ["student", "synthetic AUC", "real sample", "permuted", "gap", "share of real-sample utility"],
+            rows,
+            subtitle="Does a model trained on the synthetic table perform as one trained on real data of "
+                     "the same size? Train on the table, test on the real holdout: AUC of logistic "
+                     "regression (LR), a random forest (RF) and gradient boosting (GBM); higher is better.",
+            note=f"reading: {reading}. Share = (synthetic - permuted) / (real sample - permuted): the part "
+                 "of a real sample's utility above the no-information floor that the synthetic table reaches."))
+        absent = get(syn, "absent categories")
+        if absent:
+            warnings.append(f"{absent} declared categorical value(s) never appear in the synthetic table "
+                            "(see the evaluation's warnings); no aggregate measure above reports that")
+    # the headline, and the one-line readings of the values block
+    verdict, role = None, "ok"
+    if classes:
+        kinds = {c for _, c, _, _ in classes}
+        g1 = next(((c, t, d) for m, c, t, d in classes if m.startswith("marginal fidelity")), ("none", "not scored", None))
+        g2 = [(m.split("(")[1][:-1], c, t, d) for m, c, t, d in classes if m.startswith("downstream utility")]
+        if "gap" in kinds:
+            worst = max(g2, key=lambda x: abs(x[3] or 0)) if g2 else None
+            verdict = (f"In this draw the gap to a real sample of the same size is {g1[2]:+.3f} on marginal fidelity "
+                       f"(1-way TV)" + (f" and at most {abs(worst[3]):.3f} AUC on downstream utility ({worst[0]})" if worst else "")
+                       + "; read each gap against the permuted floor in the tables below.")
+            values.append(("marginal fidelity", g1[1]))
+            values.append(("downstream utility",
+                           "; ".join(f"{st} gap {d:+.3f}" for st, c, t, d in g2 if d is not None) or "not scored"))
+        else:
+            g1_worse = g1[0] == "worse"
+            g2_worse = [(st, d) for st, c, t, d in g2 if c == "worse"]
+            parts = []
+            if g1_worse:
+                parts.append(f"marginal fidelity (1-way TV above the range by {g1[2]:.3f})")
+            if g2_worse:
+                parts.append("downstream utility (" + ", ".join(f"{st} below the range by {d:.3f}" for st, d in g2_worse) + ")")
+            if parts:
+                verdict = ("In this draw the synthetic table reads outside the range of real samples of the same "
+                           "size on " + " and on ".join(parts) + "; the other measures read within or beyond it.")
+                role = "warning"
+            else:
+                verdict = ("In this draw the synthetic table reads within or beyond the range of real samples "
+                           "of the same size on marginal fidelity and on every student of downstream utility.")
+            values.append(("marginal fidelity", g1[1]))
+            if g2_worse:
+                values.append(("downstream utility",
+                               ", ".join(st for st, _ in g2_worse) + " below the real-sample range (by "
+                               + ", ".join(f"{d:.3f}" for _, d in g2_worse) + ")"
+                               + ("; the other students within it" if len(g2_worse) < len(g2) else "")))
+            else:
+                values.append(("downstream utility", "every student within or beyond the real-sample range"))
+    else:
+        values += [("marginal fidelity", "not scored in this run"),
+                   ("downstream utility", "not scored in this run")]
+        notes.append("Marginal fidelity and downstream utility are scored by the evaluation, which did not run: drop "
+                     "--no-evaluate and install scikit-learn (pip install 'cortec[dev]').")
+    # Stage C
+    if bound is not None and bound.verdict:
+        head = bound.verdict.split(":")[0]
+        vals = dict(bound.values)
+        if bound.verdict_role == "warning":
+            values.append(("Stage C, transmission bound", "no verdict: the test could not decide (see Stage C)"))
+        elif head == "within bound":
+            values.append(("Stage C, transmission bound", f"within bound at tolerance {vals.get('tolerance')}"))
+        else:
+            values.append(("Stage C, transmission bound", f"outside the tolerance {vals.get('tolerance')}"))
+    else:
+        values.append(("Stage C, transmission bound", "not run"))
+    # privacy
+    eps_a = (release.epsilon.get("accounted") if release is not None else None)
+    eps_c = (bound.epsilon.get("bound") if bound is not None else None)
+    per_row = (bound.epsilon.get("per_row") if bound is not None else eps_a)
+    if eps_a is not None:
+        text = f"epsilon {fmt(eps_a)} for the release"
+        if eps_c is not None:
+            text += f" + {fmt(eps_c)} for the bound = {fmt(per_row)} per row"
+        values.append(("privacy spent", text + "; generation and evaluation spent none"))
+    # cost
+    if generation is not None:
+        g = dict(generation.values)
+        cost = f"{fmt(g.get('calls'))} model calls, ${float(g.get('spend (USD)') or 0):.2f}"
+        if g.get("budget capped"):
+            cost += ", budget cap reached"
+        if seconds is not None:
+            cost += f", {fmt_seconds(seconds)} in all"
+        values.append(("cost", cost))
+    elif seconds is not None:
+        values.append(("wall time", fmt_seconds(seconds)))
+    notes += ["Read every number against the two references: a real sample of the same size is the "
+              "ceiling a synthetic table can reach at this size, and the same sample with its target "
+              "permuted is the floor of no information.",
+              "One draw at one size is a signal, not a claim; replicate (three draws) before treating a "
+              "difference as stable."]
+    eps = {"per_row": per_row} if per_row is not None else {}
+    return RunRecord(tool="cortec", stage="Results", title="marginal fidelity and downstream utility against real references",
+                     schema=schema, values=values, tables=tables, warnings=warnings, notes=notes,
+                     verdict=verdict, verdict_role=role, epsilon=eps)
 
 
 # ── builders: one per tool object ────────────────────────────────────────────────────
@@ -638,13 +893,16 @@ def record_release(release, *, n_private_rows: int | None = None) -> RunRecord:
 
 def record_generation(stats, *, backend: str | None = None, surface: str | None = None,
                       model: str | None = None, n_rows: int | None = None,
-                      positive_rate: float | None = None, schema: str = "") -> RunRecord:
+                      positive_rate: float | None = None, schema: str = "",
+                      exact_counts: str | None = None) -> RunRecord:
     """Stage B: the run's counts, the reasoning evidence and the spend."""
     values = []
     if backend:
         values.append(("backend", backend if not model else f"{backend} / {model}"))
     if surface:
         values.append(("surface", surface))
+    if exact_counts:
+        values.append(("exact counts", exact_counts))
     values += [("calls", stats.calls), ("calls parsed", stats.parse_ok),
                ("rows requested", stats.rows_requested), ("rows kept", stats.rows),
                ("yield", stats.yield_rate),
@@ -675,6 +933,8 @@ def record_generation(stats, *, backend: str | None = None, surface: str | None 
 def record_bound(report, *, schema: str = "") -> RunRecord:
     """Stage C: the three conditions, the verdict or the refusal, and the accounting."""
     c = report.dp_claim
+    _rule = getattr(report, "tolerance_rule", None) or {}
+    _derived = str(_rule.get("rule", "")).startswith("derived")
     rows, ref = [], []
     for i, (lab, r) in enumerate((("synthetic", report.synthetic),
                                   ("real sample (ceiling)", report.ceiling),
@@ -686,24 +946,41 @@ def record_bound(report, *, schema: str = "") -> RunRecord:
     t = ResultTable("bound per condition",
                     ["condition", "cells", "covered", "uncovered", "thin", "mean bound",
                      "worst bound", "within tolerance"], rows, reference_rows=ref,
-                    note=f"tolerance {report.tolerance}; the bound holds over every cell with "
-                         f"probability at least {1 - report.synthetic.alpha:.0%}")
+                    note=f"tolerance {float(report.tolerance):.4f}"
+                         f"{' (derived from the release)' if _derived else ' (given)'}; the bound holds over every "
+                         f"cell with probability at least {1 - report.synthetic.alpha:.0%}")
     values = [("level", report.synthetic.level),
               ("columns", ", ".join(report.synthetic.columns) or "global"),
               ("epsilon for the bound", c.get("epsilon_transmission_bound")),
-              ("alpha", report.synthetic.alpha), ("tolerance", report.tolerance),
-              ("discriminating", report.discriminating)]
-    if report.verdict is not None:
-        verdict = (f"synthetic data is {report.verdict} at tolerance {round(report.tolerance, 4)} with "
-                   f"simultaneous confidence {1 - report.synthetic.alpha:.0%} over "
-                   f"{report.synthetic.n_cells} released cells")
-        role = "ok" if report.verdict == "within bound" else "refusal"
+              ("alpha", report.synthetic.alpha),
+              ("tolerance", f"{float(report.tolerance):.4f}"),
+              ("tolerance set", "derived from the release" if _derived else "given")]
+    if _derived:
+        # the two released quantities the rule reads, and the limit the permuted floor tends to:
+        # a reader sees at once whether the tolerance left the controls room to discriminate
+        values += [("largest released gap to the base rate", _rule.get("largest_released_gap")),
+                   ("noise half-width", _rule.get("halfwidth")),
+                   ("floor limit at large n", _rule.get("floor_limit_at_large_n"))]
+    values += [("discriminating", report.discriminating)]
+    _n, _conf, _tol = report.synthetic.n_cells, f"{1 - report.synthetic.alpha:.0%}", f"{float(report.tolerance):.4f}"
+    _wc = report.synthetic.worst_case_bound
+    notes = ["This bounds utility. It is not a privacy audit."]
+    if report.verdict == "within bound":
+        verdict = (f"within bound: over all {_n} released cells the synthetic conditional rates lie within "
+                   f"{_tol} of the private ones, with {_conf} simultaneous confidence (worst-case bound {_wc:.4f})")
+        role = "ok"
+    elif report.verdict is not None:
+        verdict = (f"outside tolerance: the synthetic worst-case bound {_wc:.4f} exceeds the tolerance {_tol} "
+                   f"over {_n} released cells, at {_conf} simultaneous confidence")
+        role = "refusal"
     else:
         _why = getattr(report, "verdict_reason", None) or "the test did not discriminate"
-        verdict = (f"no verdict: {_why}. A bound is meaningful only when every released cell holds "
-                   "enough synthetic rows, the real-sample ceiling clears the tolerance and the "
-                   "permuted-target floor does not; do not read the synthetic row as a pass or a fail.")
+        verdict = f"no verdict: {_why}"
         role = "warning"
+        notes.insert(0, "A no verdict means the test could not decide; it is neither a pass nor a fail for "
+                        "the synthetic table. The bound is informative only when every released cell holds "
+                        "at least 20 synthetic rows, the real-sample ceiling clears the tolerance and the "
+                        "permuted floor does not.")
     warnings = []
     if c.get("epsilon_per_person_vacuous"):
         warnings.append("the per-person epsilon is vacuous; no per-person privacy claim may be made from this report")
@@ -713,8 +990,7 @@ def record_bound(report, *, schema: str = "") -> RunRecord:
                ("epsilon per person", eps["per_person"] if _is_number(eps["per_person"]) else "undeclared")]
     return RunRecord(tool="cortec", stage="Stage C", title="Utility transmission bound",
                      schema=schema or report.meta.get("schema", ""), values=values, tables=[t],
-                     warnings=warnings, verdict=verdict, verdict_role=role, epsilon=eps,
-                     notes=["This bounds utility. It is not a privacy audit."])
+                     warnings=warnings, verdict=verdict, verdict_role=role, epsilon=eps, notes=notes)
 
 
 def record_correction(gain: dict, table, *, schema: str = "", n_rows: int | None = None,
@@ -760,9 +1036,12 @@ def record(obj, **kw) -> RunRecord:
     if name == "GenerationStats":
         return record_generation(obj, **kw)
     if name == "Generator":
+        _q = getattr(obj, "quota", True)
         return record_generation(obj.stats, backend=getattr(obj, "backend", None),
                                  model=getattr(obj, "model", None),
-                                 surface=getattr(obj, "surface", None), schema=obj.schema.name, **kw)
+                                 surface=getattr(obj, "surface", None), schema=obj.schema.name,
+                                 exact_counts=("per column and per outcome" if _q and getattr(obj, "quota_by_class", True)
+                                               else "per column only (totals over the outcomes)" if _q else "off"), **kw)
     if name == "BoundReport":
         return record_bound(obj, **kw)
     if isinstance(obj, tuple) and len(obj) == 3 and isinstance(obj[2], dict) and "worth_it" in obj[2]:

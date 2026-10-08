@@ -156,7 +156,7 @@ def test_quota_prompt_carries_the_counts_and_stays_hash_locked(monkeypatch):
     without, _ = build_prompt(schema, rel, coh, 20)
     assert "EXACT COUNTS FOR THIS BATCH OF 20 ROWS" in with_q and f"exactly {q['positives']} rows" in with_q
     assert "EXACT COUNTS" not in without
-    assert rec.version == prompts.TEMPLATE_VERSION == "cortec-prompt-1.1.0"
+    assert rec.version == prompts.TEMPLATE_VERSION == "cortec-prompt-1.2.0"
     prompts.verify_integrity()   # the template with the optional block is the locked one
     # the generator option threads the counts through every call
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
@@ -311,3 +311,36 @@ def test_sub_bin_values_are_the_releases_in_class_block_cohorts_and_the_generato
     assert len(a) == len(b) and not a["age"].equals(b["age"])
     with pytest.raises(ValueError):
         select_to_release(schema, rel, pool, 300, seed=0, sub_bin="always")
+
+
+def test_per_outcome_counts_reach_the_class_blocks_batch_after_batch():
+    """Every batch is told the counts per outcome, and the rows already emitted are absorbed per
+    outcome, so the pool's rows of each class carry that class's released distribution. A run that
+    forgot the per-outcome absorption asked every batch for the same few-row pattern and never
+    reached the minority class's small bins (Gemini, NHANES, 2026-10-08: the positives' distance to
+    their block stayed at 0.12); this test holds the whole loop to the released block."""
+    from cortec.generate import Generator, emitted_counts
+    schema = _schema(); private = _private()
+    rel = release_statistics(schema, private, epsilon_total=2.0, n_min=150, max_rows_per_person=1,
+                             autoconfig=False, seed=3)
+    assert any(c.get("by_class") for c in rel.cohorts)
+    g = Generator(schema, backend="mock", model="claude-fable-5", quota=True, quota_seed=0)
+    assert g.quota_by_class is True
+    pool = g.generate(rel, 400, verbose=False)
+    for coh in rel.cohorts:
+        if not coh.get("by_class"):
+            continue
+        sub = pool[pool["_cohort"] == coh["cohort_name"]]
+        e = emitted_counts(schema, coh, sub)
+        for cls in (schema.positive, schema.negative):
+            blk = coh["by_class"][cls]; n_cls = e["by_class"][cls]["n"]
+            assert n_cls > 10, (cls, n_cls)
+            for col, b in blk["numerical"].items():
+                edges = b["bin_edges"]; got = e["by_class"][cls]["numerical"].get(col, {})
+                p = np.array([got.get(f"{edges[i]:g}-{edges[i + 1]:g}", 0) for i in range(len(edges) - 1)], float) / n_cls
+                q = np.array(b["proportions"], float); q = q / q.sum()
+                assert 0.5 * np.abs(p - q).sum() < 0.06, (cls, col, p.round(2), q.round(2))
+            for col, pr in blk["categorical"].items():
+                got = e["by_class"][cls]["categorical"].get(col, {})
+                tv = 0.5 * sum(abs(got.get(k, 0) / n_cls - v) for k, v in pr.items())
+                assert tv < 0.06, (cls, col, got, pr)

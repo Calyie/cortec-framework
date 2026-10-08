@@ -78,6 +78,20 @@ def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
     ap.add_argument("--model", default="claude-fable-5", help="the model name; must pass the capability gate")
     ap.add_argument("--surface", default="public", help="public (default), bedrock, azure or vertex (README step 2)")
     ap.add_argument("--surface-model", default=None, help="the identifier the enterprise surface expects")
+    ap.add_argument("--effort", default=None, choices=("low", "medium", "high"),
+                    help="the thinking level for a reasoning model served by Ollama (gpt-oss); default: the model's")
+    ap.add_argument("--max-output-tokens", type=int, default=None,
+                    help="output budget per call, reasoning included (default 8192); a reasoning model that "
+                         "spends its budget before writing any CSV needs more")
+    ap.add_argument("--no-quota-by-class", action="store_true",
+                    help="state the exact counts as totals only, not per outcome (the earlier releases' "
+                         "prompt); by default each outcome's rows per bin are stated as well, so the "
+                         "class-specific marginals are enforced whichever model generates")
+    ap.add_argument("--allow-unvalidated", action="store_true",
+                    help="run a model the capability gate has not measured; the output says so")
+    ap.add_argument("--request-timeout", type=float, default=None,
+                    help="seconds to wait for one model call (default 120); a reasoning model served "
+                         "locally can need several minutes per call")
     ap.add_argument("--n-rows", type=int, default=300, help="synthetic rows to produce (default 300)")
     ap.add_argument("--pool-factor", type=int, default=1,
                     help="1 (default): generate exactly n rows; 3: generate 3n and select the n that match "
@@ -92,6 +106,10 @@ def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
                     help="the Stage C tolerance: 'auto' (default) derives it from the release, or a number")
     ap.add_argument("--out", default=None, help="output folder; default results/<schema name>_<backend>")
     ap.add_argument("--no-evaluate", action="store_true", help="skip the evaluation (needs scikit-learn)")
+    ap.add_argument("--reference-draws", type=int, default=5,
+                    help="real samples (each with a permuted copy) the evaluation scores as references; "
+                         "their range is what the results panel reads each synthetic number against "
+                         "(default 5; 1 scores one sample, as the earlier releases did)")
     ap.add_argument("--exports", choices=("json", "all"), default="json",
                     help="json (default): one record per stage, complete; all: also the Markdown, "
                          "CSV and figure renderings of each record")
@@ -99,39 +117,63 @@ def parser(prog: str = "cortec run") -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
+    import time
     from cortec import Generator, Release, bound_with_controls, install_guard, release_statistics, show
-    from cortec.report import emit, header, note, warn
+    from cortec.report import (banner, emit, files_block, fmt, fmt_seconds, kv_block, note,
+                               record_results, warn)
 
     install_guard()
     a = parser(prog).parse_args(argv)
+    t0 = time.time()
 
     schema = load_schema(a.schema)
     columns = list(schema.numerical) + list(schema.categorical) + [schema.target]
     data = read_table(a.data, columns)
     if a.holdout:
         train, holdout = data, read_table(a.holdout, columns)
+        holdout_line = f"{a.holdout}, {len(holdout):,} rows (never shown to Stage A)"
     else:
         holdout = data.sample(frac=0.2, random_state=0)
         train = data.drop(holdout.index).reset_index(drop=True)
         holdout = holdout.reset_index(drop=True)
-        emit(note(f"no --holdout given: {len(holdout)} of {len(data)} rows set aside before Stage A"))
+        holdout_line = (f"{len(holdout):,} of {len(data):,} rows set aside before Stage A (no --holdout given); "
+                        f"they are never shown to Stage A")
     out = a.out or os.path.join("results", f"{schema.name}_{a.backend}")
     os.makedirs(out, exist_ok=True)
+    outdir = os.path.abspath(out)
     release_path = os.path.join(out, "release.json")
+    reuse = os.path.exists(release_path)
+
+    # ---- the banner: what is about to run, before any result ----
+    pool = f"{a.n_rows:,} rows" if a.pool_factor <= 1 else \
+        f"{a.n_rows:,} rows selected from a pool of {a.n_rows * a.pool_factor:,}"
+    emit(banner(schema.name, [
+        ("private table", f"{a.data}, {len(train):,} rows, {len(columns)} columns"),
+        ("holdout", holdout_line),
+        ("backend", f"{a.backend} / {a.model}" + (f" ({a.surface} surface)" if a.surface != "public" else "")
+                    + (f", thinking {a.effort}" if a.effort else "")),
+        ("privacy budget", f"epsilon {fmt(a.epsilon_total)} for the release (Stage A) + {fmt(a.epsilon_cert)} for "
+                           f"the bound (Stage C) = {fmt(a.epsilon_total + a.epsilon_cert)} per row; "
+                           f"n_min {a.n_min}"),
+        ("synthetic rows", pool + (f"; spend cap ${a.budget_usd:.2f}" if a.budget_usd else "")),
+        ("stages", "A release" + (" (reused)" if reuse else "") + ", B generate, C bound"
+                   + (", evaluation, results" if not a.no_evaluate else ", results (evaluation skipped)")),
+        ("output", outdir)]))
+    emit("")
 
     # ---- Stage A: the only step that reads the private data; the budget is spent here, once ----
     # The schema the release was made from is stored beside it, so a run into the same folder
     # with a different schema (other bins, another hierarchy) is refused instead of silently
     # generating from a release that does not match.
     fingerprint_path = os.path.join(out, "release_schema.txt")
-    if os.path.exists(release_path):
+    if reuse:
         stored = open(fingerprint_path, encoding="utf-8").read() if os.path.exists(fingerprint_path) else None
         if stored is not None and stored != repr(schema):
             sys.exit(f"{release_path} was made from a different schema than {a.schema}; a release "
                      f"belongs to its schema. Use another --out for this schema.")
         release = Release.from_json(release_path)
-        emit(note(f"Stage A: reusing {release_path} (a release is made once; re-running would spend "
-                  f"the budget again; use another --out for a new release)"))
+        emit(note(f"Stage A: reusing {release_path}. A release is made once; re-running it would spend "
+                  f"the budget again. Use another --out for a new release."))
     else:
         release = release_statistics(schema, train, epsilon_total=a.epsilon_total, n_min=a.n_min,
                                      max_rows_per_person=a.max_rows_per_person, n_records=a.n_rows)
@@ -140,11 +182,29 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
             f.write(repr(schema))
     rec_a = show(release, n_private_rows=len(train))
     files_a = save_record(rec_a, out, "stage_a_release", a.exports)
+    emit("")
 
     # ---- Stage B: the model sees only the release; generation costs no privacy budget ----
+    t_b = time.time()
     gen = Generator(schema, backend=a.backend, model=a.model, surface=a.surface,
-                    surface_model=a.surface_model, reasoning="on", budget_usd=a.budget_usd)
-    emit(note(gen.describe_surface()))
+                    surface_model=a.surface_model, reasoning="on", budget_usd=a.budget_usd,
+                    allow_unvalidated=a.allow_unvalidated, quota_by_class=not a.no_quota_by_class,
+                    **({"request_timeout": float(a.request_timeout)} if a.request_timeout else {}))
+    if a.effort:
+        gen.ollama_think = a.effort
+    if a.max_output_tokens:
+        gen.max_output_tokens = int(a.max_output_tokens)
+        # the same context rule as the research harness (output budget + 4,096 for the prompt), so
+        # the two never ask one Ollama server for different context sizes, which makes it reload
+        # the model between their requests
+        gen.num_ctx = max(gen.num_ctx, gen.max_output_tokens + 4096)
+    surface = dict(kv.split("=", 1) for kv in gen.describe_surface().split())
+    emit(kv_block([("Stage B", f"generating {pool}"),
+                   ("through", f"{surface.get('backend')} / {surface.get('model')}, {surface.get('surface')} surface"
+                               + (f", request model {surface['request_model']}"
+                                  if surface.get("request_model") not in (None, surface.get("model")) else "")),
+                   ("exact counts", "per column and per outcome" if gen.quota_by_class else
+                                    "per column only (totals over the outcomes)")]))
     if a.pool_factor <= 1:
         synthetic = gen.generate(release, n_rows=a.n_rows)
     else:
@@ -154,8 +214,10 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
     rec_b = show(gen, n_rows=len(synthetic), positive_rate=positive_rate)
     rec_b.values.append(("positive rate in the private data",
                          float((train[schema.target].astype(str) == str(schema.positive)).mean())))
+    rec_b.values.append(("generation time", fmt_seconds(time.time() - t_b)))
     files_b = save_record(rec_b, out, "stage_b_generate", a.exports)
     synthetic.to_csv(os.path.join(out, "synthetic.csv"), index=False)
+    emit("")
 
     # ---- Stage C: a DP bound on the private-vs-synthetic conditional gap, with its own controls ----
     report = bound_with_controls(schema, release, train, synthetic, holdout,
@@ -164,9 +226,11 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
     rec_c = show(report, schema=schema.name)
     files_c = save_record(rec_c, out, "stage_c_bound", a.exports)
     report.to_json(os.path.join(out, "bound.json"))
+    emit("")
 
-    # ---- Evaluation: fidelity and utility beside a real sample and a permuted floor ----
+    # ---- Evaluation: fidelity and utility beside real samples and their permuted floors ----
     files_e: dict = {}
+    rec_e = None
     if not a.no_evaluate:
         try:
             import sklearn  # noqa: F401
@@ -174,27 +238,42 @@ def main(argv: list[str] | None = None, prog: str = "cortec run") -> int:
             emit(warn("evaluation skipped: scikit-learn is not installed (pip install 'cortec[dev]')"))
         else:
             from cortec import evaluate
-            rec_e = evaluate(schema, {"synthetic": synthetic}, train=train, holdout=holdout)
+            rec_e = evaluate(schema, {"synthetic": synthetic}, train=train, holdout=holdout,
+                             reference_draws=max(1, a.reference_draws))
             rec_e.show()
             files_e = save_record(rec_e, out, "evaluation", a.exports)
+            emit("")
 
+    # ---- Results: marginal fidelity, downstream utility, the bound, the privacy and the cost, on one screen ----
+    rec_r = record_results(evaluation=rec_e, bound=rec_c, generation=rec_b, release=rec_a,
+                           schema=schema.name, seconds=time.time() - t0)
+    rec_r.show()
+    files_r = save_record(rec_r, out, "results", a.exports)
+    rec_r.write_markdown(os.path.join(out, "RESULTS.md"))      # the panel as a document, always
     emit("")
-    outdir = os.path.abspath(out)
-    emit(header("Files written", outdir))
-    emit(note(f"{'synthetic':12s} {'the synthetic table':30s} synthetic.csv"))
-    emit(note(f"{'release':12s} {'reused by later runs here':30s} release.json"))
-    emit(note(f"{'Stage C':12s} {'bound report':30s} bound.json"))
-    for stage, files in (("Stage A", files_a), ("Stage B", files_b),
-                         ("Stage C", files_c), ("evaluation", files_e)):
-        for name, path in files.items():
-            if not str(path).startswith("not written"):
-                label = name.replace("table_csv:", "table: ")
-                emit(note(f"{stage:12s} {label:30s} {os.path.basename(path)}"))
-    emit(note(f"all of the above are inside  {outdir}"))
+
+    # ---- Files: the ones a reader opens first, then the records, one line per stage ----
+    def kinds(files):
+        exts = sorted({os.path.splitext(p)[1].lstrip(".") for p in files.values()
+                       if not str(p).startswith("not written")})
+        return ", ".join(exts)
+    entries = [("folder", outdir),
+               ("RESULTS.md", "the results panel above, as a document"),
+               ("synthetic.csv", f"the synthetic table, {len(synthetic):,} rows"),
+               ("release.json", "the DP release (Stage A), reused by later runs into this folder"),
+               ("bound.json", "the Stage C bound with its two controls")]
+    for stem, what, files in (("stage_a_release", "the Stage A record (the release)", files_a),
+                              ("stage_b_generate", "the Stage B record (generation)", files_b),
+                              ("stage_c_bound", "the Stage C record (the bound)", files_c),
+                              ("evaluation", "the evaluation record", files_e),
+                              ("results", "the results record", files_r)):
+        if files:
+            entries.append((stem + ".*", f"{what}: {kinds(files)}"))
+    emit(files_block("everything this run wrote", entries))
     if a.exports == "json":
         emit(note("each JSON record renders to Markdown, CSV and a figure: --exports all, or "
                   "RunRecord.from_json(path).save(folder)"))
-    emit(note("the words above (tolerance, ceiling, floor, discriminating, TSTR ...): cortec terms"))
+    emit(note("the terms used above (tolerance, ceiling, floor, TSTR, share ...): cortec terms"))
     return 0
 
 

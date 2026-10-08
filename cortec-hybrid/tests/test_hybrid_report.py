@@ -32,7 +32,7 @@ def test_correction_record_reports_before_after_and_the_calibration_only_verdict
     triple = correct(schema, private, synthetic, columns=("grp",), epsilon=0.5, n_min=50, seed=0)
     rec = show(triple, schema="toy", n_rows=300)
     out = capsys.readouterr().out
-    assert rec.tool == "cortec-hybrid" and rec.stage == "Correction" and "── cortec-hybrid" in out
+    assert rec.tool == "cortec-hybrid" and rec.stage == "Correction" and "── CoRTeC-hybrid" in out
     assert rec.value("released cells") == 3 and rec.value("epsilon for the table") == 0.5
     assert rec.value("conditional error after") < rec.value("conditional error before")
     assert rec.value("worth it (calibration only)") is True and rec.verdict_role == "ok"

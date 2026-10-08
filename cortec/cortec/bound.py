@@ -404,8 +404,14 @@ def bound_with_controls(schema: Schema, release: Release, private_df: pd.DataFra
         verdict, reason = None, (f"{synth.n_cells_thin} of {synth.n_cells} released cells hold fewer than "
                                  f"{MIN_SYNTH_ROWS_PER_CELL} synthetic rows; no verdict is issued")
     elif not discriminating:
-        verdict, reason = None, ("the controls did not discriminate (the real-sample ceiling failed or the "
-                                 "permuted floor cleared); no verdict is issued")
+        why = []
+        if not ceil.within_bound:
+            why.append(f"the real-sample ceiling's worst bound {ceil.worst_case_bound:.4f} does not clear "
+                       f"the tolerance {tolerance:.4f}")
+        if floor.within_bound:
+            why.append(f"the permuted-target floor's worst bound {floor.worst_case_bound:.4f} lies within "
+                       f"the tolerance {tolerance:.4f}")
+        verdict, reason = None, "the controls did not discriminate: " + " and ".join(why) + "; no verdict is issued"
     else:
         verdict, reason = ("within bound" if synth.within_bound else "outside tolerance"), None
 

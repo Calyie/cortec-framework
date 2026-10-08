@@ -150,18 +150,21 @@ def test_n_min_floor_is_enforced():
 def test_empty_table_is_refused_rather_than_silently_correcting_nothing(capsys):
     from cortec.report import REFUSAL_TYPES, guard
     from cortec_hybrid import CorrectionError
+    # The gate reads a noised count (scale 1/(0.05 epsilon) = 40 at epsilon 0.5), so a cell of 75
+    # rows can clear n_min = 250 by chance about once in 150 draws; the test seeds the noise, and
+    # the largest cell stays far below the threshold at that seed.
     with pytest.raises(CorrectionError, match="correct nothing"):
         release_conditional_table(schema(), frame(n=300), ("edu", "region"),
-                                  epsilon=0.5, n_min=250)
+                                  epsilon=0.5, n_min=250, seed=0)
     # the refusal is registered with cortec's guard, so a run script prints it in the standard
     # layout and exits instead of showing a traceback
     assert CorrectionError in REFUSAL_TYPES
     with pytest.raises(SystemExit) as e, guard():
         release_conditional_table(schema(), frame(n=300), ("edu", "region"),
-                                  epsilon=0.5, n_min=250)
+                                  epsilon=0.5, n_min=250, seed=0)
     assert e.value.code == 2
     out = capsys.readouterr().out
-    assert "cortec-hybrid" in out and "Refused · Correction" in out
+    assert "CoRTeC-hybrid" in out and "Refused · Correction" in out
     assert "correct nothing" in out and "not a fault in the tool" in out
 
 

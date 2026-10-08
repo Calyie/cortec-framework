@@ -741,8 +741,11 @@ def test_price_table_uses_longest_prefix_not_family_prefix():
         flash = Generator(schema, backend="gemini", model="gemini-3.5-flash")
     except ImportError:
         pytest.skip("google-genai not installed")
-    assert (flash._price_in, flash._price_out) == (0.30, 2.50), \
-        "a flash tier billed at pro rates: the longest-prefix rule is not being applied"
+    # the 3.5 Flash list rate ($1.50 in, $9.00 out, thinking billed as output), not the Pro
+    # family's ($2 / $12) and not the 2.5 Flash rate it was once carried at ($0.30 / $2.50),
+    # which let a run spend 3.6x what its cap reported
+    assert (flash._price_in, flash._price_out) == (1.50, 9.00), \
+        "a flash tier billed at another tier's rate: the longest-prefix rule or the table is wrong"
 
 
 def test_a_depleted_account_is_fatal_not_a_parse_failure():

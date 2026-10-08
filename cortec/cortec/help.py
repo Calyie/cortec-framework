@@ -161,6 +161,23 @@ TERMS_CORTEC = [
                           "representativeness failure that no aggregate measure shows"),
     ("reference rows", "the ceiling and floor rows of the evaluation table, printed in grey. Read "
                        "every other row against them, not against a threshold"),
+    ("reference draws, reference spread", "the evaluation scores several real samples of the "
+                                           "synthetic table's size (five by default), each with a "
+                                           "permuted copy; the reference rows carry their means and "
+                                           "the `reference spread` table their lowest and highest "
+                                           "values. That range is what real data of this size spans "
+                                           "on this holdout"),
+    ("results panel, reading", "the last block of a run: the marginal fidelity result and the downstream "
+                               "utility result placed against the real-sample range, the Stage C "
+                               "verdict, the privacy spent and the cost. A reading says where the "
+                               "synthetic number lies: within the range, beyond every real sample, or "
+                               "outside it by how much. Nothing is passed or failed against a threshold"),
+    ("gap", "synthetic minus real sample on one measure; negative on an AUC means the synthetic-"
+            "trained student scored lower"),
+    ("share of real-sample utility", "(synthetic - permuted) / (real sample - permuted) on one "
+                                     "student: the part of a real sample's utility above the "
+                                     "no-information floor that the synthetic table reaches; 100% "
+                                     "is the real sample's own utility"),
 ]
 
 

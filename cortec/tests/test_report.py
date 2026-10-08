@@ -14,8 +14,8 @@ import pandas as pd
 import pytest
 
 from cortec import report
-from cortec.report import (ResultTable, RunRecord, fmt, paint, strip_colour, record,
-                           record_release, record_generation, record_bound)
+from cortec.report import (ResultTable, RunRecord, fmt, fmt_seconds, paint, strip_colour, record,
+                           record_release, record_generation, record_bound, record_results)
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ def test_record_refuses_a_file_of_another_format(tmp_path):
 
 def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     out = _record().render()
-    parts = ["── cortec", "Evaluation", "schema", "toy", "fidelity and utility", "!! one warning", "fine", "a note"]
+    parts = ["── CoRTeC", "Evaluation", "schema", "toy", "fidelity and utility", "!! one warning", "fine", "a note"]
     positions = [out.find(p) for p in parts]
     assert all(p >= 0 for p in positions) and positions == sorted(positions)
     assert "\x1b[" not in out
@@ -116,7 +116,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
         raise DataValidationError("column 'x' is missing. NO privacy budget was spent.")
     assert e.value.code == 2
     out = capsys.readouterr().out
-    parts = ["── cortec", "Refused · Data Validation", "refused by", "DataValidationError",
+    parts = ["── CoRTeC", "Refused · Data Validation", "refused by", "DataValidationError",
              "reason", "NO privacy budget was spent", "not a fault in the tool"]
     positions = [out.find(p) for p in parts]
     assert all(p >= 0 for p in positions) and positions == sorted(positions)
@@ -130,7 +130,7 @@ def test_render_has_header_values_table_warning_verdict_in_that_order(capsys):
     capsys.readouterr()
     assert help_main([]) == 0
     page = capsys.readouterr().out
-    assert "── cortec" in page and "Help · What you can run" in page and "run order" in page
+    assert "── CoRTeC" in page and "Help · What you can run" in page and "run order" in page
     for name in cortec.__all__:
         if callable(getattr(cortec, name, None)):
             assert name in page, name
@@ -251,6 +251,19 @@ def test_evaluate_scores_beside_a_real_sample_and_a_permuted_floor():
     assert t.rows[0][6] == 0 and t.rows[1][6] == 2        # absent categories are counted
     assert any("collapsed: absent categories grp=b, grp=c" in w for w in rec.warnings)
     assert rec.stage == "Evaluation" and rec.value("reference size n") == 200
+    assert rec.value("reference draws") == 5 and rec.table("reference spread") is not None
+    sp = rec.table("reference spread")
+    assert [r[0] for r in sp.rows] == ["1-way TV", "TSTR-LR", "TSTR-RF", "TSTR-GBM"]
+    for r in sp.rows:                                  # min <= mean <= max on both sides
+        assert r[2] <= r[1] <= r[3] and r[5] <= r[4] <= r[6]
+    assert sp.rows[1][2] > sp.rows[1][6]               # every real LR beats every permuted LR
+    assert abs(ceiling[3] - sp.rows[1][1]) < 1e-9     # the table's reference row is the mean
+    # one draw reproduces the single-sample layout, without the spread table
+    one = evaluate(schema, {"copy": good}, train=train, holdout=holdout, reference_draws=1)
+    assert one.table("reference spread") is None and one.value("reference draws") == 1
+    assert one.table("fidelity and utility").rows[1][0] == "real sample, n=200 (ceiling)"
+    with pytest.raises(ValueError):
+        evaluate(schema, {"copy": good}, train=train, holdout=holdout, reference_draws=0)
 
 
 # ── figures ───────────────────────────────────────────────────────────────────────────
@@ -264,3 +277,113 @@ def test_figures_use_the_paper_style_and_exist_for_the_stages_that_have_one(tmp_
     assert p and os.path.getsize(p) > 1000
     from cortec.generate import GenerationStats
     assert plots.figure_for(record_generation(GenerationStats()), str(tmp_path / "g.png")) is None
+
+
+# ── the results panel ─────────────────────────────────────────────────────────────────
+def _evaluation(syn, real, perm, spread=None):
+    cols = ["table", "rows", "1-way TV", "TSTR-LR", "TSTR-RF", "TSTR-GBM", "absent categories"]
+    t = ResultTable("fidelity and utility", cols,
+                    [["synthetic", 300] + syn, ["real sample, n=300 (ceiling)", 300] + real,
+                     ["permuted target, n=300 (floor)", 300] + perm], reference_rows=[1, 2])
+    tables = [t]
+    if spread:
+        tables.append(ResultTable("reference spread", ["measure", "real sample mean", "real min", "real max",
+                                                       "permuted mean", "permuted min", "permuted max"], spread))
+    return RunRecord(tool="cortec", stage="Evaluation", title="x", schema="toy", tables=tables)
+
+
+SPREAD = [["1-way TV", 0.042, 0.032, 0.046, 0.042, 0.032, 0.046],
+          ["TSTR-LR", 0.758, 0.740, 0.764, 0.498, 0.456, 0.549],
+          ["TSTR-RF", 0.718, 0.692, 0.739, 0.538, 0.497, 0.568],
+          ["TSTR-GBM", 0.713, 0.656, 0.751, 0.495, 0.444, 0.517]]
+
+
+def test_results_panel_reads_each_goal_against_the_real_sample_range():
+    ev = _evaluation([0.044, 0.711, 0.700, 0.760, 0], [0.042, 0.758, 0.718, 0.713, 0],
+                     [0.042, 0.498, 0.538, 0.495, 0], SPREAD)
+    r = record_results(evaluation=ev, schema="toy")
+    g1, g2 = r.table("marginal fidelity result"), r.table("downstream utility result")
+    assert g1.rows[0][1] == 0.044 and g1.note.startswith("reading: within the real-sample range (0.032 to 0.046)")
+    assert [row[0] for row in g2.rows] == ["LR", "RF", "GBM"] and g2.subtitle.startswith("Does a model")
+    assert g2.rows[0][5] == "82%"                      # (0.711 - 0.498) / (0.758 - 0.498)
+    assert "LR: below the real-sample range by 0.029" in g2.note    # the lowest real sample is 0.740
+    assert "GBM: above every real sample of this size" in g2.note
+    assert r.verdict_role == "warning" and "downstream utility (LR below the range by 0.029)" in r.verdict
+    v = dict(r.values)
+    assert v["marginal fidelity"].startswith("within the real-sample range")
+    assert v["downstream utility"].startswith("LR below the real-sample range (by 0.029)")
+    assert "the other students within it" in v["downstream utility"]
+    # a panel inside the range on every measure reads ok, and says so once
+    ev = _evaluation([0.040, 0.750, 0.700, 0.700, 0], [0.042, 0.758, 0.718, 0.713, 0],
+                     [0.042, 0.498, 0.538, 0.495, 0], SPREAD)
+    r = record_results(evaluation=ev)
+    assert r.verdict_role == "ok" and "within or beyond the range of real samples" in r.verdict
+    assert dict(r.values)["downstream utility"] == "every student within or beyond the real-sample range"
+    # the table subtitles survive the JSON round trip
+    back = RunRecord.from_dict(json.loads(json.dumps(r.to_dict())))
+    assert back.table("marginal fidelity result").subtitle == g1.subtitle
+    assert "*Does the synthetic table" in back.to_markdown()
+
+
+def test_results_panel_with_one_reference_draw_reports_gaps_not_ranges():
+    ev = _evaluation([0.044, 0.711, 0.700, 0.760, 0], [0.042, 0.758, 0.718, 0.713, 0],
+                     [0.042, 0.498, 0.538, 0.495, 0])
+    r = record_results(evaluation=ev)
+    assert r.verdict_role == "ok" and "is +0.002 on marginal fidelity" in r.verdict and "at most 0.047 AUC on downstream utility (LR)" in r.verdict
+    assert dict(r.values)["downstream utility"] == "LR gap -0.047; RF gap -0.018; GBM gap +0.047"
+
+
+def test_results_panel_without_an_evaluation_says_so_and_still_carries_bound_privacy_and_cost():
+    b = RunRecord(tool="cortec", stage="Stage C", title="x", schema="toy",
+                  values=[("tolerance", "0.0879")], verdict="within bound: over all 5 released cells ...",
+                  verdict_role="ok", epsilon={"bound": 1.0, "per_row": 3.0})
+    a = RunRecord(tool="cortec", stage="Stage A", title="x", schema="toy", epsilon={"accounted": 2.0})
+    g = RunRecord(tool="cortec", stage="Stage B", title="x", schema="toy",
+                  values=[("calls", 24), ("spend (USD)", 0.74), ("budget capped", True)])
+    r = record_results(evaluation=None, bound=b, generation=g, release=a, seconds=75)
+    v = dict(r.values)
+    assert v["marginal fidelity"] == "not scored in this run" and r.tables == [] and r.verdict is None
+    assert any("did not run" in n for n in r.notes)
+    assert v["Stage C, transmission bound"] == "within bound at tolerance 0.0879"
+    assert v["privacy spent"].startswith("epsilon 2.000 for the release + 1.000 for the bound = 3.000 per row")
+    assert v["cost"] == "24 model calls, $0.74, budget cap reached, 1 min 15 s in all"
+    b.verdict, b.verdict_role = "no verdict: the controls did not discriminate: ...", "warning"
+    assert dict(record_results(bound=b).values)["Stage C, transmission bound"].startswith("no verdict")
+
+
+def test_banner_files_block_and_wrapping_keep_paths_whole():
+    # the method is written CoRTeC wherever the tool names itself; the identifier stays `cortec`
+    assert report.display_name("cortec") == "CoRTeC" and report.display_name("cortec-hybrid") == "CoRTeC-hybrid"
+    assert "## CoRTeC " in RunRecord(tool="cortec", stage="Stage A", title="x", schema="t").to_markdown()
+    path = "/a/very/long/path/" + "x" * 90
+    b = report.banner("toy", [("output", path), ("stages", "A release, B generate")])
+    assert b.startswith("══ CoRTeC") and path in b and "  stages  A release, B generate" in b
+    f = report.files_block("everything", [("folder", "/p"), ("RESULTS.md", "the panel")])
+    assert f.startswith("── CoRTeC") and "  folder      /p" in f and "  RESULTS.md  the panel" in f
+    long = "word " * 40
+    assert all(len(line) <= report.WIDTH for line in report.note(long.strip()).split("\n"))
+    assert fmt_seconds(12) == "12 s" and fmt_seconds(75) == "1 min 15 s" and fmt_seconds(3723) == "1 h 02 min"
+
+
+def test_bound_verdicts_say_what_was_bounded(toy_bound_report=None):
+    """The verdict sentence names the tolerance to four places, the cells and the confidence, and a
+    no-verdict names the control that failed."""
+    class _R:
+        n_cells, n_cells_covered, n_cells_uncovered, n_cells_thin = 3, 3, 0, 0
+        mean_bound, alpha, level, columns = 0.03, 0.05, 1, ["age"]
+        def __init__(self, worst, within):
+            self.worst_case_bound, self.within_bound = worst, within
+    class _Rep:
+        dp_claim = {"epsilon_transmission_bound": 1.0, "epsilon_release": 2.0, "epsilon_total_per_row": 3.0,
+                    "epsilon_per_person": 3.0}
+        meta = {"schema": "toy"}
+        tolerance, discriminating, tolerance_rule = 0.0879, True, {"rule": "derived from the release"}
+        synthetic, ceiling, floor = _R(0.04, True), _R(0.06, True), _R(0.15, False)
+        verdict, verdict_reason = "within bound", None
+    rec = record_bound(_Rep())
+    assert rec.verdict.startswith("within bound: over all 3 released cells") and "0.0879" in rec.verdict
+    assert "95% simultaneous confidence" in rec.verdict and dict(rec.values)["tolerance"] == "0.0879"
+    bad = _Rep(); bad.verdict, bad.verdict_reason = None, "the controls did not discriminate: the permuted-target floor's worst bound 0.0500 lies within the tolerance 0.0879; no verdict is issued"
+    rec = record_bound(bad)
+    assert rec.verdict_role == "warning" and rec.verdict.startswith("no verdict: the controls did not discriminate")
+    assert rec.notes[0].startswith("A no verdict means the test could not decide")

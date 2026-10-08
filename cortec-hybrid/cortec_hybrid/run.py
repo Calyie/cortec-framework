@@ -41,7 +41,7 @@ def parser(prog: str = "cortec-hybrid run") -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
     from cortec import install_guard, show
-    from cortec.report import emit, header, kv_block, note, warn
+    from cortec.report import emit, files_block, header, kv_block, note, warn
     from cortec.run import load_schema, read_table, save_record
     from cortec_hybrid import check_feasible, correct
 
@@ -87,14 +87,17 @@ def main(argv: list[str] | None = None, prog: str = "cortec-hybrid run") -> int:
 
     emit("")
     outdir = os.path.abspath(out)
-    emit(header("Files written", outdir, tool="cortec-hybrid"))
-    emit(note(f"{'corrected':12s} {'features unchanged, target relabelled':30s} corrected.csv"))
-    for stage, stage_files in (("correction", files), ("evaluation", files_e)):
-        for name, path in stage_files.items():
-            if not str(path).startswith("not written"):
-                label = name.replace("table_csv:", "table: ")
-                emit(note(f"{stage:12s} {label:30s} {os.path.basename(path)}"))
-    emit(note(f"all of the above are inside  {outdir}"))
+
+    def kinds(stage_files):
+        return ", ".join(sorted({os.path.splitext(p)[1].lstrip(".") for p in stage_files.values()
+                                 if not str(p).startswith("not written")}))
+    entries = [("folder", outdir),
+               ("corrected.csv", "the corrected table: features unchanged, target relabelled")]
+    for stem, what, stage_files in (("correction", "the correction record", files),
+                                    ("evaluation", "the before/after evaluation record", files_e)):
+        if stage_files:
+            entries.append((stem + ".*", f"{what}: {kinds(stage_files)}"))
+    emit(files_block("everything this run wrote", entries, tool="cortec-hybrid"))
     if a.exports == "json":
         emit(note("each JSON record renders to Markdown, CSV and a figure: --exports all, or "
                   "RunRecord.from_json(path).save(folder)"))

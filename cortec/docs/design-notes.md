@@ -78,7 +78,10 @@ Two steps, both post-processing of the release, both on by default.
   the released histograms for the cohort as a whole and updated after each accepted batch, so a
   batch returning more or fewer valid rows than asked cannot leave the cohort short. A frontier
   model given these counts reproduces them exactly; given shares, it matches about two thirds of
-  them. `Generator(quota=False)` turns this off.
+  them. In a cohort with class blocks the counts are stated per outcome (the positives' rows per
+  bin from the positive block, the negatives' from the negative block), so each class's marginals
+  are enforced rather than read from the blocks; `Generator(quota_by_class=False)` states the
+  totals only, as the earlier releases did. `Generator(quota=False)` turns the counts off.
 - **Selection from a pool.** `generate_selected(release, n_rows, pool_factor=3)` asks for three
   times the rows and keeps the `n_rows` whose cell counts match the release: inclusion weights by
   iterative proportional fitting over every released cell, systematic sampling, then a greedy

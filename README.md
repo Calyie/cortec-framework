@@ -80,6 +80,26 @@ An audit script in the research project reads this tree and the technical report
 change to these packages is published. It belongs to the project's internal audit suite, which is
 available from the authors on request.
 
+## Proof of concept
+
+`poc/` runs CoRTeC end to end on two public datasets, NHANES 2017-2018 and UCI Adult: the download,
+Stage A, Stage B through a frozen model, Stage C, the evaluation beside real samples of the same
+size and their permuted floors, the results panel that reads the marginal fidelity result and the downstream
+utility result against the range those real samples span, and the three downstream students
+trained on the synthetic table and saved as joblib files. A run writes the release, the synthetic
+table, the bound, the results panel, the trained models and their held-out scores under
+`poc/artifacts/<dataset>/`, with a report, so both results can be checked on your own machine:
+
+```
+python poc/run_poc.py --dataset nhanes --backend mock          # offline, no key: the pipeline end to end
+python poc/run_poc.py --dataset nhanes --backend ollama --model gpt-oss:120b --effort low \
+    --max-output-tokens 32768 --allow-unvalidated --request-timeout 7200   # a model you host
+```
+
+[`poc/README.md`](poc/README.md) has the full run, what each artefact is, and how to read the
+report. The proof of concept is a test feature of this repository: `python3 -m pytest poc/test_poc.py`
+runs it end to end on the offline mock backend, and it is not part of the paper.
+
 ## Citation and licence
 
 See [`CITATION.cff`](CITATION.cff): cite the paper for the method and this repository for the

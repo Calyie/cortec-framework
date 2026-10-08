@@ -137,7 +137,7 @@ def _apportion(probs, n: int, rng) -> np.ndarray:
     return base
 
 
-def batch_quotas(schema: Schema, cohort: dict, n_rows: int, rng) -> dict:
+def batch_quotas(schema: Schema, cohort: dict, n_rows: int, rng, by_class: bool = False) -> dict:
     """Exact per-column counts for one batch, apportioned from the released histograms: the number
     of positives from the class balance and, for every column, rows per bin or per category.
     Where the release carries class blocks the positives' counts come from the positive block and
@@ -148,53 +148,82 @@ def batch_quotas(schema: Schema, cohort: dict, n_rows: int, rng) -> dict:
     cb = cohort.get("class_balance") or {}
     pos, neg = str(schema.positive), str(schema.negative)
     k = int(_apportion([float(cb.get(pos, 0.5)), float(cb.get(neg, 0.5))], n_rows, rng)[0])
-    by_class = cohort.get("by_class") or {}
-    parts = ([(k, by_class[pos]), (n_rows - k, by_class[neg])] if pos in by_class and neg in by_class
-             else [(n_rows, cohort)])
+    blocks = cohort.get("by_class") or {}
+    have_blocks = pos in blocks and neg in blocks
+    parts = [(pos, k, blocks[pos]), (neg, n_rows - k, blocks[neg])] if have_blocks else [(None, n_rows, cohort)]
     q = {"positives": k, "n": n_rows, "numerical": {}, "categorical": {}}
+    # With `by_class`, the counts are also stated per outcome: the positives' rows per bin from the
+    # positive block and the negatives' from the negative block, whose sums are the totals. The
+    # totals alone leave the class-specific marginals to the model's reading of the class blocks;
+    # one generator followed them at a total-variation distance of 0.08 and another at 0.15, and
+    # the second lost 0.07 to 0.12 AUC on the students. Stated per outcome they are enforced, not
+    # read; it is the same apportionment, so it carries no more than the release does.
+    per = {cls: {"n": m, "numerical": {}, "categorical": {}} for cls, m, _ in parts if cls is not None}
     for col in schema.numerical:
         edges = cohort["numerical"][col]["bin_edges"]
+        labels = [f"{edges[i]:g}-{edges[i + 1]:g}" for i in range(len(edges) - 1)]
         counts = np.zeros(len(edges) - 1, int)
-        for m, blk in parts:
+        for cls, m, blk in parts:
             if m > 0:
-                counts += _apportion(blk["numerical"][col]["proportions"], m, rng)
-        q["numerical"][col] = [(f"{edges[i]:g}-{edges[i + 1]:g}", int(c)) for i, c in enumerate(counts) if c > 0]
+                part = _apportion(blk["numerical"][col]["proportions"], m, rng)
+                counts += part
+                if cls is not None:
+                    per[cls]["numerical"][col] = [(lab, int(c)) for lab, c in zip(labels, part) if c > 0]
+        q["numerical"][col] = [(lab, int(c)) for lab, c in zip(labels, counts) if c > 0]
     for col in schema.categorical:
         cats = list(cohort["categorical"][col].keys())
         counts = np.zeros(len(cats), int)
-        for m, blk in parts:
+        for cls, m, blk in parts:
             if m > 0:
                 pr = blk["categorical"][col]
-                counts += _apportion([float(pr.get(c, 0.0)) for c in cats], m, rng)
+                part = _apportion([float(pr.get(c, 0.0)) for c in cats], m, rng)
+                counts += part
+                if cls is not None:
+                    per[cls]["categorical"][col] = [(c, int(v)) for c, v in zip(cats, part) if v > 0]
         q["categorical"][col] = [(c, int(v)) for c, v in zip(cats, counts) if v > 0]
+    if by_class and have_blocks:
+        q["by_class"] = per
     return q
 
 
-def cohort_quota_targets(schema: Schema, cohort: dict, n_rows: int, rng) -> dict:
+def cohort_quota_targets(schema: Schema, cohort: dict, n_rows: int, rng, by_class: bool = False) -> dict:
     """Integer targets for a whole cohort's n_rows (see batch_quotas); batches then ask for what
     the cohort still owes, so a batch returning more or fewer valid rows than asked cannot break
-    the cohort's totals."""
-    q = batch_quotas(schema, cohort, n_rows, rng)
-    return {"n": n_rows, "positives": q["positives"],
-            "numerical": {c: dict(v) for c, v in q["numerical"].items()},
-            "categorical": {c: dict(v) for c, v in q["categorical"].items()}}
+    the cohort's totals. With `by_class` the targets are also kept per outcome."""
+    q = batch_quotas(schema, cohort, n_rows, rng, by_class=by_class)
+    out = {"n": n_rows, "positives": q["positives"],
+           "numerical": {c: dict(v) for c, v in q["numerical"].items()},
+           "categorical": {c: dict(v) for c, v in q["categorical"].items()}}
+    if "by_class" in q:
+        out["by_class"] = {cls: {"n": v["n"], "numerical": {c: dict(x) for c, x in v["numerical"].items()},
+                                 "categorical": {c: dict(x) for c, x in v["categorical"].items()}}
+                           for cls, v in q["by_class"].items()}
+    return out
 
 
 def emitted_counts(schema: Schema, cohort: dict, df: pd.DataFrame) -> dict:
-    pos = (int((df[schema.target].astype(str).str.strip() == str(schema.positive)).sum())
-           if schema.target in df.columns else 0)
-    out = {"n": len(df), "positives": pos, "numerical": {}, "categorical": {}}
-    for c in schema.numerical:
-        if c not in df.columns:
-            continue
-        edges = cohort["numerical"][c]["bin_edges"]; e = np.asarray(edges, float)
-        v = pd.to_numeric(df[c], errors="coerce").fillna(e[0]).values
-        cnt = np.bincount(np.clip(np.digitize(v, e[1:-1]), 0, len(e) - 2), minlength=len(e) - 1)
-        out["numerical"][c] = {f"{edges[i]:g}-{edges[i + 1]:g}": int(k) for i, k in enumerate(cnt) if k}
-    for c in schema.categorical:
-        if c not in df.columns:
-            continue
-        out["categorical"][c] = {str(k): int(v) for k, v in df[c].astype(str).str.strip().value_counts().items()}
+    def _counts(frame: pd.DataFrame) -> dict:
+        o = {"n": len(frame), "numerical": {}, "categorical": {}}
+        for c in schema.numerical:
+            if c not in frame.columns:
+                continue
+            edges = cohort["numerical"][c]["bin_edges"]; e = np.asarray(edges, float)
+            v = pd.to_numeric(frame[c], errors="coerce").fillna(e[0]).values
+            cnt = np.bincount(np.clip(np.digitize(v, e[1:-1]), 0, len(e) - 2), minlength=len(e) - 1)
+            o["numerical"][c] = {f"{edges[i]:g}-{edges[i + 1]:g}": int(k) for i, k in enumerate(cnt) if k}
+        for c in schema.categorical:
+            if c not in frame.columns:
+                continue
+            o["categorical"][c] = {str(k): int(v) for k, v in frame[c].astype(str).str.strip().value_counts().items()}
+        return o
+    out = _counts(df)
+    if schema.target in df.columns:
+        is_pos = (df[schema.target].astype(str).str.strip() == str(schema.positive)).values
+        out["positives"] = int(is_pos.sum())
+        out["by_class"] = {str(schema.positive): _counts(df[is_pos]), str(schema.negative): _counts(df[~is_pos])}
+    else:
+        out["positives"] = 0
+        out["by_class"] = {str(schema.positive): _counts(df.iloc[:0]), str(schema.negative): _counts(df.iloc[:0])}
     return out
 
 
@@ -208,18 +237,50 @@ def remaining_quotas(target: dict, done: dict, b: int, rng) -> dict:
         return [(k, int(c)) for k, c in zip(keys, counts) if c > 0]
     pos_rem = max(target["positives"] - done["positives"], 0); rows_rem = max(target["n"] - done["n"], 0)
     k = int(round(b * pos_rem / rows_rem)) if rows_rem > 0 else 0
-    return {"n": b, "positives": min(max(k, 0), b),
+    k = min(max(k, 0), b)
+    if target.get("by_class"):
+        # per outcome: what each class still owes, scaled to that class's share of this batch; the
+        # batch totals are the sums over the two outcomes, so the two statements agree
+        def _scale_to(t: dict, d: dict, m: int) -> list:
+            rem = {kk: max(int(v) - int(d.get(kk, 0)), 0) for kk, v in t.items()}
+            if sum(rem.values()) <= 0 or m <= 0:
+                return []
+            keys = list(rem); counts = _apportion([rem[kk] for kk in keys], m, rng)
+            return [(kk, int(c)) for kk, c in zip(keys, counts) if c > 0]
+        classes = list(target["by_class"])
+        shares = {classes[0]: k, classes[1]: b - k} if len(classes) == 2 else {classes[0]: b}
+        by = {}
+        for cls, m in shares.items():
+            t_cls = target["by_class"][cls]; d_cls = (done.get("by_class") or {}).get(cls, {})
+            by[cls] = {"n": m, "numerical": {}, "categorical": {}}
+            for kind in ("numerical", "categorical"):
+                for c, t in t_cls.get(kind, {}).items():
+                    by[cls][kind][c] = _scale_to(t, d_cls.get(kind, {}).get(c, {}), m)
+        q = {"n": b, "positives": k, "numerical": {}, "categorical": {}, "by_class": by}
+        for kind in ("numerical", "categorical"):
+            for c in target[kind]:
+                tot: dict = {}
+                for cls in by:
+                    for kk, cc in by[cls][kind].get(c, []):
+                        tot[kk] = tot.get(kk, 0) + cc
+                q[kind][c] = [(kk, cc) for kk, cc in tot.items() if cc > 0]
+        return q
+    return {"n": b, "positives": k,
             "numerical": {c: _scale(t, done["numerical"].get(c, {})) for c, t in target["numerical"].items()},
             "categorical": {c: _scale(t, done["categorical"].get(c, {})) for c, t in target["categorical"].items()}}
 
 
 def _absorb(done: dict, e: dict) -> None:
-    done["n"] += e["n"]; done["positives"] += e["positives"]
-    for kind in ("numerical", "categorical"):
-        for c, cnt in e[kind].items():
-            d = done[kind].setdefault(c, {})
-            for k, v in cnt.items():
-                d[k] = d.get(k, 0) + v
+    def _add(into: dict, frm: dict) -> None:
+        into["n"] = into.get("n", 0) + frm.get("n", 0)
+        for kind in ("numerical", "categorical"):
+            for c, cnt in frm.get(kind, {}).items():
+                d = into.setdefault(kind, {}).setdefault(c, {})
+                for k, v in cnt.items():
+                    d[k] = d.get(k, 0) + v
+    _add(done, e); done["positives"] = done.get("positives", 0) + e.get("positives", 0)
+    for cls, part in (e.get("by_class") or {}).items():
+        _add(done.setdefault("by_class", {}).setdefault(cls, {"n": 0, "numerical": {}, "categorical": {}}), part)
 
 
 def _normalise_categorical(col: pd.Series) -> pd.Series:
@@ -243,6 +304,18 @@ def _counts_block(schema: Schema, q: dict) -> str:
              f"exactly, then write them out.",
              f"  {schema.target}: exactly {q['positives']} rows \"{schema.positive}\" and "
              f"{q['n'] - q['positives']} rows \"{schema.negative}\""]
+    if q.get("by_class"):
+        # stated per outcome: the rows of each class carry that class's distribution, which is what
+        # the per-outcome blocks above describe
+        for cls, part in q["by_class"].items():
+            lines.append(f"  Among the {part['n']} rows with {schema.target} = \"{cls}\":")
+            for col, items in part["numerical"].items():
+                lines.append(f"    {col}: " + ", ".join(f"{b}: {c} rows" for b, c in items))
+            for col, items in part["categorical"].items():
+                lines.append(f"    {col}: " + ", ".join(f"{c}: {v}" for c, v in items))
+        lines.append(f"  (within an outcome every column's counts sum to that outcome's rows; across the two "
+                     f"outcomes they sum to {q['n']})")
+        return "\n".join(lines)
     for col, items in q["numerical"].items():
         lines.append(f"  {col}: " + ", ".join(f"{b}: {c} rows" for b, c in items))
     for col, items in q["categorical"].items():
@@ -479,17 +552,21 @@ class Generator:
     MIN_PARSE_RATE = 0.40
     CHECK_EVERY = 2
 
-    # Measured list prices, $ per million tokens (input, output). Longest prefix wins, so a
-    # cheap tier is never billed at its family's frontier rate — that mistake overcharged one
-    # model 6.7x and tripped its budget cap at roughly a tenth of its true spend.
+    # List prices, $ per million tokens (input, output), read from claude.com/pricing and
+    # ai.google.dev/gemini-api/docs/pricing on 2026-10-08; reasoning or thinking tokens are billed
+    # as output on every vendor. Longest prefix wins, so a cheap tier is never billed at its
+    # family's frontier rate: that mistake overcharged one model 6.7x and tripped its budget cap
+    # at roughly a tenth of its true spend. The opposite mistake is as costly: Gemini 3.5 Flash was
+    # carried at the 2.5 Flash rate for a time, so the cap let a run spend 3.6x what it reported.
     PRICES: dict[str, tuple[float, float]] = {
-        "claude-fable": (10.0, 50.0), "claude-opus": (10.0, 50.0),
-        "claude-sonnet": (3.0, 15.0), "claude-haiku": (1.0, 5.0),
+        "claude-fable": (10.0, 50.0), "claude-opus-5.5": (4.0, 20.0), "claude-opus": (5.0, 25.0),
+        "claude-sonnet": (2.0, 10.0), "claude-haiku-5.5": (0.5, 2.5), "claude-haiku": (1.0, 5.0),
         "gpt-5": (1.25, 10.0), "gpt-4.1": (2.0, 8.0), "gpt-4o": (2.5, 10.0),
         "gemini-3-flash": (0.30, 2.50), "gemini-3.1-flash": (0.30, 2.50),
-        "gemini-3.5-flash": (0.30, 2.50), "gemini-3.6-flash": (0.30, 2.50),
-        "gemini-3.7-flash": (0.30, 2.50), "gemini-3": (2.0, 12.0),
-        "gemini-2.5-pro": (1.25, 10.0), "gemini-2.5-flash": (0.30, 2.50),
+        "gemini-3.5-flash": (1.50, 9.00),
+        "gemini-3.6-flash": (0.75, 3.75), "gemini-3.7-flash": (0.75, 3.75), "gemini-3.8-flash": (0.75, 3.75),
+        "gemini-3": (2.0, 12.0), "gemini-2.5-pro": (1.25, 10.0), "gemini-2.5-flash": (0.30, 2.50),
+        "gpt-oss": (0.0, 0.0),      # open weights served locally through Ollama: no per-token price
     }
 
     def __init__(self, schema: Schema, *, backend: str = "anthropic",
@@ -499,7 +576,8 @@ class Generator:
                  budget_usd: float | None = None, request_timeout: float = 120.0,
                  max_retries: int = 3, seed: int | None = None,
                  reasoning: str = "on", surface: str = "public",
-                 surface_model: str | None = None, quota: bool = True, quota_seed: int | None = None):
+                 surface_model: str | None = None, quota: bool = True, quota_seed: int | None = None,
+                 quota_by_class: bool = True):
         self.schema = schema
         self.backend = backend
         self.model = model
@@ -507,6 +585,10 @@ class Generator:
         # exact per-batch counts (build_prompt quotas): the model is given the number of rows per
         # bin and per category apportioned from the release for each batch, instead of shares
         self.quota = bool(quota)
+        # per-outcome exact counts in cohorts with class blocks (see batch_quotas): on by default,
+        # so the class-specific marginals are enforced whichever model generates; `quota_by_class=
+        # False` (the CLI's --no-quota-by-class) states the totals only, as the earlier releases did
+        self.quota_by_class = bool(quota_by_class)
         self._quota_rng = np.random.default_rng(quota_seed)
         self.max_retries = max_retries
         self.budget_usd = budget_usd
@@ -828,6 +910,11 @@ class Generator:
                                 {"role": "user", "content": prompt}],
                    "options": {"num_ctx": self.num_ctx, "num_predict": self.max_output_tokens,
                                "temperature": 0.7}}
+        # A reasoning model served by Ollama (gpt-oss) takes a thinking level, low, medium or
+        # high; None leaves the model's default. Its chain of thought comes back as text, so the
+        # reasoning evidence counts it at four characters a token and says so.
+        if getattr(self, "ollama_think", None):
+            payload["think"] = self.ollama_think
         headers = {"Host": self._host_override} if self._host_override else {}
         try:
             resp = self._http.post("/api/chat", json=payload, headers=headers)
@@ -845,9 +932,12 @@ class Generator:
         d = resp.json()
         msg = d.get("message", {})
         content = (msg.get("content") or "").strip()
+        self._bill(int(d.get("prompt_eval_count", 0) or 0), int(d.get("eval_count", 0) or 0))
+        _think_chars = len(msg.get("thinking") or "")
+        self._note_reasoning(_think_chars // 4 if _think_chars else None, saw_block=bool(_think_chars))
         if not content:
             self.stats.empty_content += 1
-            thinking = len(msg.get("thinking") or "")
+            thinking = _think_chars
             raise EmptyContentError(
                 f"{self.model} returned empty content (done_reason="
                 f"{d.get('done_reason')!r}, {thinking} chars of hidden reasoning). The output "
@@ -902,49 +992,76 @@ class Generator:
         k = int(mk.group(1)) if mk else None
         cols: dict[str, list[str]] = {}
         mq = re.search(r"EXACT COUNTS FOR THIS BATCH OF (\d+) ROWS", prompt)
+
+        def _column_values(col: str, rest: str, m: int) -> list[str]:
+            vals: list[str] = []
+            if col == self.schema.target:
+                mt = re.match(r'\s*exactly (\d+) rows "(.*?)" and (\d+) rows "(.*?)"', rest)
+                if mt:
+                    vals = [mt.group(2)] * int(mt.group(1)) + [mt.group(4)] * int(mt.group(3))
+            elif col in self.schema.numerical:
+                for item in rest.split(", "):
+                    mb = re.match(r"\s*(-?[\d.]+)-(-?[\d.]+): (\d+) rows", item)
+                    if mb:
+                        lo, hi, c = float(mb.group(1)), float(mb.group(2)), int(mb.group(3))
+                        vals += [str(int(rng.uniform(lo, max(lo, hi - 1e-9)))) for _ in range(c)]
+            elif col in self.schema.categorical:
+                for item in rest.split(", "):
+                    cat, _, c = item.rpartition(": ")
+                    if c.strip().isdigit():
+                        vals += [cat.strip()] * int(c)
+            if vals:
+                vals = vals[:m] + [vals[-1]] * max(0, m - len(vals))
+                rng.shuffle(vals)
+            return vals
+
+        # per outcome, when the block states the counts that way: each class's rows carry that
+        # class's counts, which is exactly what the per-outcome statement asks of a model
+        per_class: list[tuple[str, int, dict[str, list[str]]]] = []
         if mq:
             n = int(mq.group(1))
             block = prompt[mq.end():].split("\n\n", 1)[0].splitlines()[1:]
+            current: dict[str, list[str]] | None = None; m_cur = n
             for line in block:
-                if ":" not in line:
+                ma = re.match(r'\s*Among the (\d+) rows with .+? = "(.*?)":', line)
+                if ma:
+                    current = {}; m_cur = int(ma.group(1))
+                    per_class.append((ma.group(2), m_cur, current))
+                    continue
+                if ":" not in line or line.strip().startswith("("):
                     continue
                 col, rest = line.strip().split(":", 1); col = col.strip()
-                vals: list[str] = []
-                if col == self.schema.target:
-                    mt = re.match(r'\s*exactly (\d+) rows "(.*?)" and (\d+) rows "(.*?)"', rest)
-                    if mt:
-                        vals = [mt.group(2)] * int(mt.group(1)) + [mt.group(4)] * int(mt.group(3))
-                elif col in self.schema.numerical:
-                    for item in rest.split(", "):
-                        mb = re.match(r"\s*(-?[\d.]+)-(-?[\d.]+): (\d+) rows", item)
-                        if mb:
-                            lo, hi, c = float(mb.group(1)), float(mb.group(2)), int(mb.group(3))
-                            vals += [str(int(rng.uniform(lo, max(lo, hi - 1e-9)))) for _ in range(c)]
-                elif col in self.schema.categorical:
-                    for item in rest.split(", "):
-                        cat, _, c = item.rpartition(": ")
-                        if c.strip().isdigit():
-                            vals += [cat.strip()] * int(c)
+                target = current if current is not None else cols
+                vals = _column_values(col, rest, m_cur if current is not None else n)
                 if vals:
-                    vals = vals[:n] + [vals[-1]] * max(0, n - len(vals))
-                    rng.shuffle(vals); cols[col] = vals
+                    target[col] = vals
         rows = [",".join(self.schema.columns)]
-        for i in range(n):
+
+        def _row(i: int, src: dict[str, list[str]], cls: str | None) -> str:
             vals = []
             for c in self.schema.numerical_cols:
-                if c in cols:
-                    vals.append(cols[c][i]); continue
+                if c in src:
+                    vals.append(src[c][i]); continue
                 lo, hi = self.schema.numerical[c]
                 vals.append(str(int(rng.uniform(lo, hi))))
             for c in self.schema.categorical_cols:
-                vals.append(cols[c][i] if c in cols else str(rng.choice(self.schema.categorical[c])))
-            if self.schema.target in cols:
-                vals.append(cols[self.schema.target][i])
+                vals.append(src[c][i] if c in src else str(rng.choice(self.schema.categorical[c])))
+            if cls is not None:
+                vals.append(cls)
+            elif self.schema.target in src:
+                vals.append(src[self.schema.target][i])
             elif k is None:
                 vals.append(str(rng.choice([self.schema.positive, self.schema.negative])))
             else:
                 vals.append(str(self.schema.positive if i < k else self.schema.negative))
-            rows.append(",".join(vals))
+            return ",".join(vals)
+
+        if per_class:
+            body = [_row(i, src, cls) for cls, m, src in per_class for i in range(m)]
+            rng.shuffle(body)
+            rows += body[:n]
+        else:
+            rows += [_row(i, cols, None) for i in range(n)]
         return "\n".join(rows)
 
     # ── parsing ─────────────────────────────────────────────────────────────────────
@@ -1141,7 +1258,8 @@ class Generator:
             got = 0
             attempts = 0
             max_attempts = (want // self.rows_per_call + 1) * self.max_retries
-            _target = cohort_quota_targets(self.schema, cohort, int(want), self._quota_rng) if self.quota else None
+            _target = (cohort_quota_targets(self.schema, cohort, int(want), self._quota_rng, by_class=self.quota_by_class)
+                       if self.quota else None)
             _done = {"n": 0, "positives": 0, "numerical": {}, "categorical": {}}
             while got < want and attempts < max_attempts:
                 if self.budget_usd is not None and self.stats.spend_usd >= self.budget_usd:

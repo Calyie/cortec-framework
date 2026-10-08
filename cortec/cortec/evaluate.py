@@ -98,46 +98,97 @@ def tstr(schema: Schema, df: pd.DataFrame, holdout: pd.DataFrame, *, seed: int =
     return out
 
 
+MEASURES = ("1-way TV", "TSTR-LR", "TSTR-RF", "TSTR-GBM")
+
+
 def evaluate(schema: Schema, tables: dict[str, pd.DataFrame], *, train: pd.DataFrame,
-             holdout: pd.DataFrame, n: int | None = None, seed: int = 1000) -> RunRecord:
+             holdout: pd.DataFrame, n: int | None = None, seed: int = 1000,
+             reference_draws: int = 5) -> RunRecord:
     """Score every table in `tables` (name -> DataFrame) beside a real sample of `train` and its
     permuted-target floor, both of size `n` (default: the first table's size). `holdout` is real
-    data that was not used to build the release. Returns the standard record; its one table is
-    the paper's fidelity-and-utility layout with the two reference rows marked."""
+    data that was not used to build the release. Returns the standard record; its first table is
+    the paper's fidelity-and-utility layout with the two reference rows marked.
+
+    `reference_draws` real samples are drawn (seeds `seed`, `seed + 1`, ...), each with its
+    permuted copy, and the two reference rows carry their means. With more than one draw the
+    record gains a second table, `reference spread`: for each measure the mean, the lowest and
+    the highest value over the real samples and over their permuted copies. That range is what
+    real data of this size spans on this holdout, and the results panel reads every synthetic
+    number against it instead of against a threshold. `reference_draws=1` is the single sample
+    the earlier releases scored."""
     if not tables:
         raise ValueError("evaluate() needs at least one table to score")
+    if reference_draws < 1:
+        raise ValueError("reference_draws must be at least 1")
     cols = schema.columns          # features and the target
     names = list(tables)
     n = int(n or len(tables[names[0]]))
-    rng = np.random.default_rng(seed)
-    real = train.sample(min(n, len(train)), random_state=seed).reset_index(drop=True)
-    perm = real.copy()
-    perm[schema.target] = rng.permutation(perm[schema.target].values)
-    rows, absent = [], {}
-    scored = [(nm, tables[nm][cols]) for nm in names] + \
-             [(f"real sample, n={len(real)} (ceiling)", real[cols]),
-              (f"permuted target, n={len(perm)} (floor)", perm[cols])]
     from .report import emit_progress_done, ticker
-    for label, df in scored:
+
+    def score(label, df):
         # three students per table take seconds each; the terminal shows which is being scored
         with ticker(lambda t, label=label: f"Evaluation · training the students on {label} · {t:.0f}s"):
             u = tstr(schema, df, holdout, seed=0)
         miss = absent_categories(schema, df)
-        absent[label] = miss
-        rows.append([label, len(df), marginal_tv(schema, df, holdout), u["LR"], u["RF"], u["GBM"], len(miss)])
+        return [len(df), marginal_tv(schema, df, holdout), u["LR"], u["RF"], u["GBM"], len(miss)], miss
+
+    rows, absent = [], {}
+    for nm in names:
+        r, miss = score(nm, tables[nm][cols])
+        absent[nm] = miss
+        rows.append([nm] + r)
+    ref_real, ref_perm = [], []
+    n_ref = min(n, len(train))
+    for i in range(reference_draws):
+        s = seed + i
+        real = train.sample(n_ref, random_state=s).reset_index(drop=True)
+        perm = real.copy()
+        perm[schema.target] = np.random.default_rng(s).permutation(perm[schema.target].values)
+        tag = f" {i + 1}/{reference_draws}" if reference_draws > 1 else ""
+        ref_real.append(score(f"real sample{tag}", real[cols])[0])
+        ref_perm.append(score(f"permuted target{tag}", perm[cols])[0])
     emit_progress_done()
+
+    def mean_row(label, rs):
+        a = np.array([r[:5] for r in rs], dtype=float)
+        m = a.mean(axis=0)
+        return [label, int(round(m[0])), float(m[1]), float(m[2]), float(m[3]), float(m[4]),
+                int(round(float(np.mean([r[5] for r in rs]))))]
+
+    rows.append(mean_row(f"real sample, n={n_ref} (ceiling)", ref_real))
+    rows.append(mean_row(f"permuted target, n={n_ref} (floor)", ref_perm))
+    means = f" The two reference rows are means over {reference_draws} draws." if reference_draws > 1 else ""
     table = ResultTable("fidelity and utility",
                         ["table", "rows", "1-way TV", "TSTR-LR", "TSTR-RF", "TSTR-GBM", "absent categories"],
                         rows, reference_rows=[len(names), len(names) + 1],
-                        note="lower TV is better; higher AUC is better; read every row against the "
-                             "two reference rows, not against a threshold")
-    values = [("tables scored", len(names)), ("reference size n", n),
-              ("holdout rows", len(holdout)),
+                        subtitle="Fidelity (1-way TV, lower is better) and utility (train on the table, test on "
+                                 "the holdout: AUC, higher is better) in one table, as in the paper." + means,
+                        note="read every row against the two reference rows, not against a threshold: the "
+                             "real sample is the ceiling at this size, the permuted target is the floor of "
+                             "no information")
+    tables_out = [table]
+    if reference_draws > 1:
+        spread = []
+        for j, meas in zip((1, 2, 3, 4), MEASURES):
+            a = np.array([r[j] for r in ref_real], dtype=float)
+            b = np.array([r[j] for r in ref_perm], dtype=float)
+            spread.append([meas, float(np.nanmean(a)), float(np.nanmin(a)), float(np.nanmax(a)),
+                           float(np.nanmean(b)), float(np.nanmin(b)), float(np.nanmax(b))])
+        tables_out.append(ResultTable(
+            "reference spread",
+            ["measure", "real sample mean", "real min", "real max", "permuted mean", "permuted min", "permuted max"],
+            spread,
+            subtitle=f"What real data of this size spans on this holdout: {reference_draws} real samples of "
+                     f"{n_ref} rows and their permuted copies.",
+            note="a synthetic number inside the real-sample range is indistinguishable from a real sample of "
+                 "the same size on that measure, at this number of draws"))
+    values = [("tables scored", len(names)), ("reference size n", n_ref),
+              ("reference draws", reference_draws), ("holdout rows", len(holdout)),
               ("holdout positive rate", float((holdout[schema.target].astype(str).str.strip() == schema.positive).mean()))]
     warnings_ = [f"{label}: absent categories {', '.join(miss)}" for label, miss in absent.items()
                  if miss and label in names]
     rec = RunRecord(tool="cortec", stage="Evaluation", title="Fidelity and utility beside real references",
-                    schema=schema.name, values=values, tables=[table], warnings=warnings_,
+                    schema=schema.name, values=values, tables=tables_out, warnings=warnings_,
                     notes=["A single run at one size is a signal, not a claim; replicate before "
                            "treating a difference as stable."])
     return rec

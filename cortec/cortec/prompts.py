@@ -24,7 +24,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-TEMPLATE_VERSION = "cortec-prompt-1.1.0"   # 1.1.0: optional exact-count block in the cohort prompt
+TEMPLATE_VERSION = "cortec-prompt-1.2.0"   # 1.1.0: optional exact-count block in the cohort prompt;
+                                           # 1.2.0: that block states the counts per outcome by default
 
 
 class PromptIntegrityError(RuntimeError):
