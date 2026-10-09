@@ -41,7 +41,7 @@ pip install './cortec[openai]'         # GPT, recommended on Azure OpenAI
 pip install './cortec[gemini]'         # Gemini, recommended on Google Vertex AI
 pip install ./cortec-hybrid
 pip install './cortec[dev]'            # pytest and scikit-learn, for the tests and the evaluator
-python3 -m pytest cortec/tests cortec-hybrid/tests -q    # 151 + 28, offline
+python3 -m pytest cortec/tests cortec-hybrid/tests poc/test_poc.py -q    # 159 + 28 + 1, offline
 ```
 
 **Where this should run.** CoRTeC is proposed for the enterprise-hosted, tenant-isolated model
