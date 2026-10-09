@@ -417,8 +417,9 @@ report.to_json("bound.json")       # readable by a third party without the priva
   permuted, which must not). If the ceiling fails or the floor clears, the test did not
   discriminate, `report.verdict` is `None`, and that run is not reported.
 - `epsilon_cert` is spent once, through the ledger. The deployment total is
-  `epsilon_release + epsilon_cert`, stated per row and per person. The Laplace scale uses the
-  public floor `n_min`, never the private cell size, so the bound is pure ε-DP.
+  `epsilon_release + epsilon_cert`, stated per row and per person. Each cell's rate is taken over
+  `max(|c|, n_min)` and the Laplace scale uses the public floor `n_min`, so the sensitivity bound holds
+  for every cell whatever its true size and the bound is pure ε-DP.
 - A released cell the synthetic data never covers scores the trivial bound of 1.0, so a bound
   cannot be obtained by covering a convenient subset; cells with fewer than 20 synthetic rows are
   reported as thin. The noise is unseedable. The report's `_what_this_is` and

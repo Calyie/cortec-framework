@@ -15,8 +15,8 @@ the noise into a one-sided confidence bound,
 
 Three design points carry the guarantee and are enforced here rather than documented.
 
-  * The Laplace scale uses the PUBLIC suppression floor `n_min` as the sensitivity bound, never the
-    private cell size. A scale set from the true cell size is data-dependent under add/remove
+  * Each cell's rate is taken over max(|c|, n_min) and the Laplace scale uses the PUBLIC suppression
+    floor `n_min` as the sensitivity bound, so the bound holds for every cell whatever its true size. A scale set from the true cell size is data-dependent under add/remove
     adjacency and is not pure epsilon-DP. The bound is conservative by n_c / n_min on each cell,
     which is the price of that.
   * Cells partition the private data, so the k rate queries compose in PARALLEL: each may spend the
@@ -81,7 +81,7 @@ DP_CLAIM = {
     "privacy_unit": "one dataset row",
     "composition": "parallel across the disjoint released cells",
     "mechanism": "Laplace",
-    "sensitivity": "1/n_min per released cell rate: the public size floor, not the private cell "
+    "sensitivity": "1/n_min per released cell rate, taken over max(|c|, n_min): the public size floor, not the private cell "
                    "size. The bound is conservative by n_c/n_min on each cell.",
 }
 
@@ -286,7 +286,10 @@ def _noisy_private_rates(schema: Schema, release: Release, private_df: pd.DataFr
         if n_c == 0:
             raise BoundError(f"released cell {cell!r} holds no private rows in the data passed; the "
                              f"private data does not match the release (wrong columns, bins or file)")
-        p_true = float(pos[m].mean())
+        # the rate over max(|c|, n_min), as the release takes its rates: the sensitivity is then at most
+        # 1/n_min for EVERY cell, including one the noisy gate released below the floor (such a cell
+        # reads at |c|/n_min of its true rate, a rare, bounded, downward bias)
+        p_true = float(pos[m].sum()) / max(n_c, n_min)
         # sensitivity 1/n_min (public), parallel across disjoint cells: each spends the full budget
         scale = ledger.spend(f"stage_c_rate[{cell}]", kind="rate", epsilon=epsilon_cert,
                              sensitivity=1.0 / n_min, composition="parallel", partition=cell,
