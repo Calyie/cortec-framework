@@ -508,7 +508,7 @@ with guard():            # the same, for one block (works in notebooks too)
 ```
 
 ```
-── CoRTeC 1.0.0 · Refused · Data Validation ────────────────────────────────────────────
+── CoRTeC 1.1.0 · Refused · Data Validation ────────────────────────────────────────────
   refused by  DataValidationError
   reason
     column 'income' is missing from the data. NO privacy budget was spent.
